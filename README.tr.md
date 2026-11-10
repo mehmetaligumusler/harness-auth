@@ -299,6 +299,21 @@ Ve `http://127.0.0.1:8090` adresini açın. Host modunda ana proxy portu da host
 
 </details>
 
+## 🖥️ ZCode Manager (Windows masaüstü uygulaması)
+
+Windows 10/11 için yerel masaüstü uygulaması ([`desktop/`](desktop/README.md))
+proxy'yi terminal olmadan yönetir: Z.AI OAuth girişi **ve API Key
+bağlantıları**, tek tıkla geçiş yapılan çoklu hesaplar, Coding/Start Plan
+seçimi ve otomatik geçiş, GLM model yönetimi, sistem tepsisinden proxy
+açma/kapama, gerçek kota kartları, canlı loglar ve tek tıkla **Claude Code**
+başlatma (proxy veya normal mod). Tauri 2 + React + TypeScript ile yazıldı;
+proxy çekirdeği hiç değiştirilmeden yan süreç (`zcode-proxy.exe`) olarak
+çalıştığı için son kullanıcıda Bun ya da Docker gerekmez. Hesap kimlikleri
+anahtarı Windows Credential Manager'da saklanan AES-256-GCM kasasında tutulur.
+
+Kurulum, kullanım ve geliştirme yönergeleri için bkz.
+[`desktop/README.md`](desktop/README.md).
+
 ## 🧮 Kullanılabilir modeller
 
 Proxy `/v1/models` altında bu modelleri listeler (liste temsilidir; başka model adları olduğu gibi iletilir, whitelist yoktur):

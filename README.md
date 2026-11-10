@@ -298,6 +298,21 @@ Then open `http://127.0.0.1:8090`. In host mode the main proxy port also occupie
 
 </details>
 
+## 🖥️ ZCode Manager (Windows desktop app)
+
+A native Windows 10/11 desktop app ([`desktop/`](desktop/README.md)) manages the
+whole proxy without any terminal: Z.AI OAuth login **and API-key connections**,
+multiple accounts with one-click switching, Coding/Start Plan selection and
+auto-switching, GLM model management, proxy start/stop from the system tray,
+real quota cards, live logs — and one-click **Claude Code** launch in proxy or
+normal mode. Built with Tauri 2 + React + TypeScript; the proxy core runs
+untouched as a managed sidecar (`zcode-proxy.exe`), so end users need neither
+Bun nor Docker. Account credentials live in an AES-256-GCM vault whose key is
+stored in Windows Credential Manager.
+
+See [`desktop/README.md`](desktop/README.md) for installation, usage and
+development instructions.
+
 ## 🧮 Available models
 
 The proxy lists these models on `/v1/models` (the list is presentational only — other model names are forwarded as-is, there is no whitelist):
