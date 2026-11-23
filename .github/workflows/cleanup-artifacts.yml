@@ -1,11 +1,9 @@
 name: Cleanup Artifacts
 
-# Each Release run uploads six artifacts (five platform binaries + the APK)
-# only so the release job can download them again. They serve no purpose once
-# the release is published, and a full artifact store makes every later run
-# fail at "Upload artifact" with "Artifact storage quota has been hit", which
-# skips the release jobs and leaves the release without binaries. This
-# workflow deletes the leftovers every morning.
+# Each Release run uploads desktop installer artifacts only so the release job
+# can download and publish them. They serve no purpose once published, and a
+# full artifact store makes later runs fail on quota. This workflow deletes
+# old artifacts every morning.
 
 on:
   schedule:

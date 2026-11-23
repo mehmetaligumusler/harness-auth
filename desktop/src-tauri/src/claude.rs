@@ -138,7 +138,7 @@ pub fn build_launch_script(folder: &Path, opts: &LaunchOptions) -> Result<Vec<St
 
     let mut lines: Vec<String> = vec![
         "@echo off".into(),
-        "title ZCode Manager ^| Claude Code".into(),
+        "title HarnessAuth ^| Claude Code".into(),
     ];
 
     if mode == "proxy" {
@@ -151,7 +151,7 @@ pub fn build_launch_script(folder: &Path, opts: &LaunchOptions) -> Result<Vec<St
         let token = opts
             .proxy_api_key
             .filter(|k| !k.trim().is_empty())
-            .unwrap_or("zcode-manager-local");
+            .unwrap_or("harnessauth-local");
         lines.push(format!("set \"ANTHROPIC_BASE_URL={endpoint}\""));
         lines.push(format!("set \"ANTHROPIC_AUTH_TOKEN={token}\""));
         lines.push("set \"ANTHROPIC_API_KEY=\"".into());
@@ -215,7 +215,7 @@ pub fn launch(launches_dir: &Path, opts: LaunchOptions) -> Result<(), String> {
     }
 
     let mut cmd = Command::new("cmd.exe");
-    cmd.args(["/d", "/c", "start", "ZCode Manager - Claude Code", "cmd", "/c"])
+    cmd.args(["/d", "/c", "start", "HarnessAuth - Claude Code", "cmd", "/c"])
         .arg(&script)
         .stdout(Stdio::null())
         .stderr(Stdio::null());

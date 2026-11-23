@@ -2,362 +2,91 @@
 
 **English** | [Türkçe](README.tr.md)
 
-[![Release](https://img.shields.io/github/v/release/KilimcininKorOglu/zcode-api)](https://github.com/KilimcininKorOglu/zcode-api/releases)
-[![CI](https://github.com/KilimcininKorOglu/zcode-api/actions/workflows/ci.yml/badge.svg)](https://github.com/KilimcininKorOglu/zcode-api/actions/workflows/ci.yml)
+# HarnessAuth
 
-<img src="docs/images/zcode-app-icon.png" width="88" alt="ZCode Proxy icon" />
+**Unified Windows desktop session manager for Claude Code, OpenCode, Antigravity CLI (`agy`), and ZCode/Z.AI.**
 
-# ZCode Proxy
-
-**Plug your GLM coding plan into every AI coding tool.**
-
-A small tool that runs on your own machine: Zhipu Z.AI / Bigmodel coding plans (personal plan / trial plan)
-normally only work inside the official client. ZCode Proxy exposes them locally as standard OpenAI / Anthropic APIs,
-so Claude Code, Codex, Silly Tavern ... can all use your plan quota directly.
-
-[Quick start](#-one-minute-quickstart) · [Connect coding tools](#-connect-your-coding-tools) · [Docker & configuration](#-docker--configuration) · [FAQ](#-faq)
+HarnessAuth stores all of your AI coding harness sessions, OAuth tokens, and API keys inside a single **Windows Credential Manager + AES-256-GCM** encrypted vault. Add unlimited accounts with your preferred providers, edit them, switch active methods in one click, or safely disable them without losing credentials — built with **Tauri v2 + Rust + React**.
 
 </div>
 
 ---
 
-## What it does for you
+## Features
 
-- 🧩 **One address, three formats** —— OpenAI, Anthropic, and Responses (Codex-only) APIs all served locally on `127.0.0.1:8080`; use whichever format your tool speaks.
-- 🖥️ **Visual panel included** —— launching in a terminal opens a visual panel (headless mode also available); start, log in, and read logs with clicks, or manage from your phone.
-- 💬 **Built-in web chat** —— open `/webui` for a local ChatGPT-style chat page to test models quickly.
-- 🌙 **Idle channel & instant plan claiming** (optional) —— a free off-peak compute channel plus automatic claiming of limited trial plans, both built in.
-- 🔀 **Hybrid plan auto-switch** (optional) —— holding both a trial start-plan and a personal coding-plan? Pick the serving order yourself with `planPriority`: spend the expiring trial credits first, or keep the coding plan primary and drop to the trial when its 5-hour / weekly window empties (`planAutoSwitch`).
-- 🔌 **In-plan MCP aggregate endpoint** — official ZCode plugin MCPs (Tianyancha / Wind / Tonghuashun iFinD ..., 130+ tools) are merged behind a **single** `/mcp` endpoint (streamable HTTP, tools namespaced `{plugin}__{tool}` — clients configure just one MCP server; requires a coding-plan login, `GET /mcp` in a browser shows the catalogue); the built-in web chat can also attach your own MCP servers as model tools.
-- 🪟 **All platforms** —— Windows / macOS / Linux from one codebase; also compiles to a single-file binary or Docker deployment.
+### Claude Code (`claude`)
+- **5-Method Active Switcher:**
+  1. **Claude Subscription (OAuth):** Add multiple Anthropic Claude Pro/Max OAuth accounts via isolated `CLAUDE_CONFIG_DIR` (`claude auth login`) or import your live `~/.claude/.credentials.json` session.
+  2. **ZCode Subscription (OAuth Proxy):** Pick any saved ZCode / BigModel OAuth account and model; the embedded background engine starts automatically and configures `~/.claude/settings.json`.
+  3. **Z API (Direct API Key):** Connect directly to Z.AI (`https://api.z.ai/api/anthropic`) or BigModel without running a local proxy.
+  4. **Provider API Key (`custom_api`):** Add, edit, and switch unlimited API accounts for Anthropic (official API), OpenRouter, DeepSeek, Z.AI, BigModel, or any custom provider ID + Base URL + model.
+  5. **Disabled:** Safely clears active routing and credentials, auto-backing up any unsaved live session first.
+- Preserves all unrelated user settings, hooks, permissions, and custom environment variables in `~/.claude/settings.json` and `~/.claude.json`.
 
-## 🚀 One-minute quickstart
+### OpenCode (`opencode`)
+- **4-Method Active Switcher:**
+  1. **OpenCode Profile (OAuth / API):** Import live `%USERPROFILE%\.local\share\opencode\auth.json` + `opencode.json`, sign in via isolated `OPENCODE_AUTH_PATH` (`opencode auth login`), or add unlimited API profiles for Anthropic, OpenAI, Google, OpenRouter, Z.AI, BigModel, or any custom provider ID.
+  2. **ZCode Subscription (OAuth Proxy):** Select from multiple ZCode OAuth accounts and a model to configure `provider.zcode` automatically.
+  3. **Z API (Direct API Key):** Apply saved Z.AI / BigModel API keys directly to OpenCode without needing a local proxy.
+  4. **Disabled:** Auto-backs up unsaved live credentials and cleans HarnessAuth-managed provider entries.
+- Full create, edit, per-session enable/disable toggle, activate, and delete support.
 
-### Step 1: Download the latest `exe` from [GitHub Releases](https://github.com/KilimcininKorOglu/zcode-api/releases)
+### Antigravity CLI (`agy`)
+- Manages Windows Credential Manager (`service: "gemini"`, `account: "antigravity"`) and the `%USERPROFILE%\.gemini\antigravity-cli\antigravity-oauth-token` mirror in the encrypted vault.
+- Import your active `agy` session, add additional Google accounts without losing existing ones, inspect token expiry, switch accounts in one click, or disable.
 
-Yes, that is all — it really is that simple.
+### ZCode Accounts & Embedded Background Engine
+- Manage multiple Z.AI / BigModel OAuth and API Key accounts (with optional custom Base URLs), per-account enable/disable toggles, and connection testing.
+- Desktop-only architecture (no console/TUI or Docker); the ZCode OAuth bridge runs as a bundled headless sidecar (`harness-zcode-engine`).
+- Coding Plan / Start Plan / Auto-Switch, live quotas, model testing, live logs, system tray, and Windows autostart.
 
-After launch you enter the terminal control panel (this is the main UI):
+---
 
-<img src="docs/images/tui-raw.png" alt="ZCode Proxy terminal control panel" width="980" />
+## Installation
 
-The panel has four cards: **Login & settings** (provider / plan / login), **Plan usage** (remaining-ratio bar + reset countdown, press <kbd>r</kbd> or click Refresh), **Proxy service** (start/stop / current config), **Logs** (one line per request, live scrolling; each row shows the serving plan and human-readable durations such as `13.0s` / `1m0s`). Press <kbd>s</kbd> to start the proxy; once you see `Status: running` you are ready.
+### End Users (Windows 10 / 11)
+1. Download and run **`HarnessAuth_<version>_x64-setup.exe`** from [GitHub Releases](../../releases) (per-user install, no admin rights required).
+2. No Bun, Node.js, or Docker installation is required — the background engine is bundled inside the installer.
 
-> Prefer not to use keyboard shortcuts? Buttons on the panel support **mouse clicks**. Want it to run silently in the background? `zcode-proxy.exe --cli serve`.
+### Data Layout & Security
+- Application data is stored under `%APPDATA%\harness-auth` (`settings.json`, `accounts.json`, `sessions.json`, `proxy\`, `launches\`).
+- All OAuth tokens and API keys are encrypted with **AES-256-GCM** using a master key stored in **Windows Credential Manager** (`HarnessAuth / master-key`). Raw secrets never cross the IPC boundary to the React UI.
+- Existing accounts from legacy `%APPDATA%\zcode-manager` installations are migrated automatically on first launch.
 
-### Panel shortcuts
+---
 
-| Key                                                       | Action                                                                                      |
-|-----------------------------------------------------------|---------------------------------------------------------------------------------------------|
-| <kbd>s</kbd>                                              | Start / stop proxy                                                                          |
-| <kbd>l</kbd>                                              | Log in to current provider (opens browser for authorization)                                |
-| <kbd>L</kbd>                                              | bigmodel paste login (fallback mode; `l` login itself needs no callback and works headless) |
-| <kbd>o</kbd>                                              | Log out                                                                                     |
-| <kbd>p</kbd> / <kbd>t</kbd>                               | Switch provider (Z.AI ↔ Bigmodel) / plan (coding-plan ↔ start-plan)                         |
-| <kbd>r</kbd>                                              | Refresh plan usage                                                                          |
-| <kbd>↑</kbd><kbd>↓</kbd> / <kbd>PgUp</kbd> / <kbd>g</kbd> | Scroll logs / jump to bottom                                                                |
-| <kbd>c</kbd>                                              | Clear log screen                                                                            |
-| <kbd>q</kbd>                                              | Quit panel                                                                                  |
+## Development & Building the Installer
 
-## 🔌 Connect your coding tools
-
-Once the proxy is running, the local address is **`http://127.0.0.1:8080`**. Your tool only needs two changes: **base URL** and **model name**.
-
-About "API Key": if you set `auth.proxyApiKey` in config (or env var `ZCODE_PROXY_API_KEY`), enter the same value in your tool; if unset, any value (e.g. `sk-1234`) works — local use is not validated.
-
-<details>
-<summary><b>Claude Code</b> (click to expand)</summary>
-
-Environment variables for one shell session:
-
-```bash
-# macOS / Linux
-export ANTHROPIC_BASE_URL=http://127.0.0.1:8080
-export ANTHROPIC_AUTH_TOKEN=sk-1234
-export ANTHROPIC_MODEL=glm-4.7
-claude
-```
+Prerequisites: **Bun 1.4+**, **Node.js 22+**, **pnpm 10+**, **Rust (stable, MSVC)**.
 
 ```powershell
-# Windows PowerShell
-$env:ANTHROPIC_BASE_URL = "http://127.0.0.1:8080"
-$env:ANTHROPIC_AUTH_TOKEN = "sk-1234"
-$env:ANTHROPIC_MODEL = "glm-4.7"
-claude
+# 1. Install dependencies
+bun install
+pnpm --dir desktop install
+
+# 2. Build the embedded headless ZCode engine sidecar
+bun run build:sidecar
+
+# 3. Run the desktop app in development mode
+bun run dev
+
+# 4. Build the Windows NSIS installer (.exe)
+bun run build:installer
 ```
 
-Or apply it permanently to every Claude Code session through `~/.claude/settings.json` (same variables, no shell changes needed):
+Installer output: `desktop/src-tauri/target/release/bundle/nsis/HarnessAuth_1.0.0_x64-setup.exe`.
 
-```json
-{
-  "env": {
-    "ANTHROPIC_BASE_URL": "http://127.0.0.1:8080",
-    "ANTHROPIC_AUTH_TOKEN": "sk-1234",
-    "ANTHROPIC_MODEL": "glm-4.7"
-  }
-}
+For desktop architecture details, see [desktop/README.md](desktop/README.md).
+
+## Tests
+
+```powershell
+# Headless ZCode engine tests
+bun test
+
+# Desktop frontend typecheck + production build
+pnpm --dir desktop build
+
+# Rust backend unit tests (isolated temp dirs; never touches live user configs)
+cargo test --manifest-path desktop/src-tauri/Cargo.toml --lib
 ```
-
-</details>
-
-<details>
-<summary><b>Codex CLI</b> (via Responses API)</summary>
-
-Edit `~/.codex/config.toml`:
-
-```toml
-model_provider = "zcode"
-model = "glm-5.3"
-
-[model_providers.zcode]
-name = "ZCode Proxy"
-base_url = "http://127.0.0.1:8080/v1"
-wire_api = "responses"
-env_key = "ZCODE_API_KEY"   # any non-empty value works unless you set a proxy key
-```
-
-</details>
-
-<details>
-<summary><b>Other OpenAI-compatible tools</b> (Cherry Studio, Kilo Code, Cline, LobeChat...)</summary>
-
-In the tool's "Custom Provider" settings enter:
-
-| Setting                | Value                                                         |
-|------------------------|---------------------------------------------------------------|
-| API address (Base URL) | `http://127.0.0.1:8080/v1`                                    |
-| API Key                | Your proxy key (any value if unset)                           |
-| Model                  | `glm-4.7`, `glm-5.3`, `glm-4.6v`, etc., see model table below |
-
-For Anthropic-format tools (e.g. some Claude clients) set the address to `http://127.0.0.1:8080`; the `/v1/messages` path is handled automatically.
-
-</details>
-
-Want to try it manually first? Open **http://127.0.0.1:8080/webui** for the built-in chat page; or use curl:
-
-```bash
-curl http://127.0.0.1:8080/v1/chat/completions -H "Content-Type: application/json" -d '{
-  "model": "glm-5.3-flash",
-  "messages": [{"role": "user", "content": "Hello!"}]
-}'
-```
-
-## 🐳 Docker & configuration
-
-<details>
-<summary><b>Docker deployment</b></summary>
-
-**Easiest way — Compose from this repo.** Everything persistent lives in `./docker-data/` (config + credentials), the proxy is reachable on `http://127.0.0.1:8080`, and log timestamps render in Europe/Istanbul time:
-
-```bash
-git clone https://github.com/KilimcininKorOglu/zcode-api && cd zcode-api
-mkdir -p docker-data
-echo 'ZCODE_PROXY_CREDENTIAL_SECRET=a-secret-passphrase-only-you-know' > .env
-
-# Log in once (no browser needed on the server: open the printed link on any
-# device and the login completes automatically). The credential is stored in
-# docker-data/credentials.json and survives container recreation.
-docker compose run --rm zcode-proxy bun run src/index.ts auth login zai
-
-docker compose up -d --build
-```
-
-Tune the running container through `docker-data/config.yaml` (auto-created on first start, fully commented): set `planAutoSwitch: true` there for the hybrid plan auto-switch (applies live, no restart needed). Updating later is `git pull && docker compose up -d --build` (build + recreate in one command).
-
-**Or use the prebuilt image** without cloning (multi-arch amd64 / arm64, runs as `bun` user):
-
-```bash
-# Log in on the host with a fixed encryption seed (both providers are callback-free: open the link on any device and login completes automatically)
-ZCODE_PROXY_CREDENTIAL_SECRET="a-secret-passphrase-only-you-know" \
-  bun run src/index.ts auth login zai
-
-docker run -d --name zcode-proxy -p 8080:8080 \
-  -v "$(pwd)/config.yaml:/data/config.yaml:ro" \
-  -v "$(HOME)/.zcode-proxy/credentials.json:/home/bun/.zcode-proxy/credentials.json:ro" \
-  -e ZCODE_PROXY_CREDENTIAL_SECRET="a-secret-passphrase-only-you-know" \
-  ghcr.io/kilimcininkoroglu/zcode-proxy:latest
-```
-
-```yaml
-services:
-  zcode-proxy:
-    image: ghcr.io/kilimcininkoroglu/zcode-proxy:latest
-    ports: ["8080:8080"]
-    volumes:
-      - ./config.yaml:/data/config.yaml:ro
-      - ./credentials.json:/home/bun/.zcode-proxy/credentials.json:ro
-    environment:
-      ZCODE_PROXY_CREDENTIAL_SECRET: "a-secret-passphrase-only-you-know"
-    restart: unless-stopped
-```
-
-</details>
-
-<details>
-<summary><b>Tunable config & environment variables</b> (works untouched)</summary>
-
-The config file is `config.yaml` in the project root (auto-generated on first launch, fully commented — see [`config.example.yaml`](config.example.yaml)); environment variables take precedence. Common ones:
-
-| Env var                         | Default          | Description                                                                                                                      |
-|---------------------------------|------------------|----------------------------------------------------------------------------------------------------------------------------------|
-| `ZCODE_PROXY_PORT`              | `8080`           | Listen port                                                                                                                      |
-| `ZCODE_PROXY_API_KEY`           | none             | Key clients use to access the proxy (unset = no check)                                                                           |
-| `ZCODE_PROVIDER`                | `zai`            | Provider `zai` / `bigmodel`                                                                                                      |
-| `ZCODE_PLAN_AUTO_SWITCH`        | off              | Set to `1`/`true` for the hybrid plan auto-switch (`planAutoSwitch`): the watcher keeps traffic on the first plan in `planPriority` whose watched signals still have quota, and a request a plan rejects falls to the next plan for that one request. Flag off = no fallback at all; plan selection is exactly your config |
-| `ZCODE_PLAN_PRIORITY`           | `start-plan, coding-plan` | Comma-separated plan preference order for the auto-switch (`planPriority`); e.g. `coding-plan, start-plan` to keep the coding plan primary |
-| `ZCODE_PLAN_POLL_INTERVAL_SEC`  | `30`             | Auto-switch poll interval in seconds (`planPollIntervalSec`) |
-| `ZCODE_PLAN_AUTO_RESET`         | on               | Set to `off`/`false` to disable `planAutoReset`: the automatic use of the 5h-window reset rights (threshold / expire / 429 triggers) |
-| `ZCODE_BATCH_AS_STREAM`         | on               | Set to `0`/`false` to disable `batchAsStream`: batch (non-streaming) requests are sent upstream as streams and reassembled into one JSON, because the upstream gateway kills silent non-streaming requests past ~180s (symptom: 502 after exactly ~3 minutes) |
-| `ZCODE_PROXY_CONFIG`            | `config.yaml`    | Config file path                                                                                                                 |
-| `ZCODE_PROXY_CREDENTIAL_SECRET` | machine-specific | Encryption seed for login credentials (pin it for cross-machine moves / Docker; compose reads it from the gitignored `.env`, see `.env.example`) |
-| `ZCODE_LOG_FORMAT`              | desktop table    | Set to `compact` for single-line logs (narrow screens)                                                                           |
-| `ZCODE_PANEL_ENABLED`           | off              | Set to `1`/`true` so headless `serve` mode (incl. Docker) also starts a local web panel                                          |
-| `ZCODE_PANEL_TOKEN`             | none             | Panel access token, **required when the panel is enabled** (panel refuses to start without one, to avoid an exposed control API) |
-| `ZCODE_PANEL_PORT`              | `8090`           | Panel port                                                                                                                       |
-| `ZCODE_PANEL_HOST`              | `127.0.0.1`      | Panel bind address. Docker bridge networks cannot `-p`-map a loopback bind, so set `0.0.0.0` there; pair it with a **strong token** and do **not** expose the port publicly |
-| `ZCODE_UPDATE_CHECK`            | on               | Set to `off`/`0` to disable the "new version available" check at startup (notify-only, never auto-updates)                       |
-| `ZCODE_UPDATE_SKIP`             | none             | Comma-separated versions to ignore, e.g. `v4.7.6,v4.7.7`                                                                         |
-| `ZCODE_ERROR_LOG`               | `<config dir>/errors.log` | Persistent JSONL failure log: one line per client-visible 4xx/5xx plus the failure-reason events behind it (retries, aborts, stream failures). Entries carry the per-boot request id (`a1b2-#007`) and, when the client/upstream sent them, the client's request/session id and the upstream's `x-request-id` for correlation. Past 5 MB it rotates to `errors.log.1` |
-
-Plan type (`plan`: `coding-plan` personal / `start-plan` trial) can be toggled with <kbd>t</kbd> in the panel and is written back to config.yaml.
-
-**Coding-first auto-switch** (the "5-hour limit ran out, move me to the trial" setup): with `planAutoSwitch: true`, set in config.yaml
-
-```yaml
-planPriority:
-  - coding-plan
-  - start-plan
-planSwitchRules:
-  coding-plan:
-    limits: ["TOKENS_LIMIT", "TIME_LIMIT", "WEEK_LIMIT"]   # the 5h / monthly / weekly windows that trigger the switch
-  start-plan:
-    limits: ["BALANCE"]
-```
-
-The watcher polls both plans' quota (`planPollIntervalSec`, default 30) and serves the first plan in `planPriority` whose watched signals still have quota; a request the plan rejects also falls to the next plan for that one request. The fallback never lands on a plan whose latest probe reported it empty (a trial plan with no token buckets is skipped and the client sees the honest rejection instead). Everything above (watcher + fallback) runs only while `planAutoSwitch` is on: off means no auto-switching and no fallback at all.
-
-**Automatic 5h-window reset rights** (the "🎁 N reset available" gifts the ZCode panel shows): with `planAutoReset` (default on), the proxy actively claims available reset opportunities via `POST /api/v1/coding-plan/reset/opportunity` on the official client's cadence and polls `GET /api/v1/coding-plan/reset/status` every `statusPollIntervalSec` (default 300s). It automatically spends a held FIVE_HOUR right when the 5h window crosses `useThresholdPercent` (default 90), when the right is about to expire within `expireGraceSec` (default 600s), or right after a coding-plan 429 — in that case the SAME request is retried on the reopened window and the plan fallback never runs. Transient rate-limit 429s (business codes 1302/1303/1305/1312 per ZCode's own classification) never trigger a spend; `useOn429: false` turns the 429 trigger off entirely. The `/use` endpoint cannot pick which right to spend, so after each spend the proxy re-reads `/status` and logs a NOTE when the server consumed a longer-lived right while the earliest one is still held. Requires `auth login` (the zcode JWT); without it the feature stays passive. Master switch env override: `ZCODE_PLAN_AUTO_RESET`.
-
-```yaml
-planAutoReset:
-  enabled: true
-  useThresholdPercent: 90
-  useOn429: true
-  expireGraceSec: 600
-  statusPollIntervalSec: 300
-```
-
-**Marketing & promotional gift auto-claim (`marketing`)**: with `marketing` (default on), the proxy mimics the official client's `MarketingService` by querying `GET /api/v1/marketing/touch` at startup and every `intervalSec` (default 1800s / 30m). Any active campaign deliveries, promotional gift tokens, or perks are acknowledged with `POST /api/v1/marketing/touch/action` (`action_type: "confirm"`), locking them into your account. Env overrides: `ZCODE_MARKETING_ENABLED`, `ZCODE_MARKETING_INTERVAL_SEC`.
-
-```yaml
-marketing:
-  enabled: true
-  intervalSec: 1800
-```
-
-**Editing config.yaml without a restart**: the running proxy watches the file and applies edits in place (watch for the `[config] reloaded: ...` log line). Flipping `claim.auto`, `planAutoSwitch` or `plan` also starts or stops the matching background job, and changing `planPollIntervalSec` restarts the watcher with the new cadence; a broken file keeps the running config and stays watching. Only `server` (port/host) needs a restart.
-
-For servers without a TUI, use a browser instead: set `ZCODE_PANEL_ENABLED=1` and `ZCODE_PANEL_TOKEN=<your-own-random-string>`, start, then forward `http://127.0.0.1:8090` over SSH — you can view status and quota, switch provider/plan, log in/out, watch live logs and the MCP list. The panel binds loopback by default (`ZCODE_PANEL_HOST` overrides the address, see below) and requires the token on every API call; without a token it does not start. Commands are dispatched in-process so no extra control port is opened. "Stop proxy" on the panel only stops the proxy — the process itself still exits cleanly (SIGTERM/SIGINT and panel shutdown both clear background timers — auto-claim, captcha pool — before exit); logging out from the panel also clears the running credential and stops the proxy so new requests cannot keep spending the old account's quota.
-
-**New-version notice**: `serve` and TUI check GitHub's latest release once asynchronously at startup — at most one extra log line (press <kbd>u</kbd> in the TUI to re-check manually); it never blocks startup or affects the proxy; offline / blocked / rate-limited / changed response shapes are all silently ignored. Manual checks always give a definite answer ("already latest" or "check unavailable"). Inside containers the image is immutable, so the hint shows the **pull command for your runtime** (Docker: `docker compose pull && docker compose up -d`, Podman: `podman compose pull && podman compose up -d`; otherwise just "pull the new image and recreate the container") instead of replacing files in place (releases ship no checksums, so no auto-download replacement). Set `ZCODE_UPDATE_CHECK=off` to disable checks, or `ZCODE_UPDATE_SKIP=v4.7.6` to silence a noisy version.
-
-**Reaching the panel inside Docker**: the panel listens on the *container's own* `127.0.0.1` by default, so with default bridge networking `-p 8080:8080` cannot expose it — adding `-p 8090:8090` alone still fails (the port maps to the container's non-loopback address). Two ways out: ① add `ZCODE_PANEL_HOST=0.0.0.0` to the environment plus `-p 8090:8090` — the panel then binds every container interface, so the token must be strong and 8090 should only be reachable by whoever needs it; ② on a Linux server use host networking so the container shares the host loopback:
-
-```yaml
-services:
-  zcode-proxy:
-    # keep existing image / volumes / restart etc.
-    network_mode: host        # remove the old ports: in host mode
-    environment:
-      ZCODE_PROXY_CREDENTIAL_SECRET: "a-secret-passphrase-only-you-know"
-      ZCODE_PANEL_ENABLED: "1"
-      ZCODE_PANEL_TOKEN: "${ZCODE_PANEL_TOKEN:?please set the panel token in .env first}"
-      ZCODE_PANEL_PORT: "8090"
-```
-
-Then create a forward-only tunnel locally (`-N` = no shell):
-
-```bash
-ssh -N -L 8090:127.0.0.1:8090 user@host
-```
-
-Then open `http://127.0.0.1:8090`. In host mode the main proxy port also occupies the host port directly, so keep allowing 8080 in security-group/firewall rules as before, and **do not** expose 8090 publicly.
-
-</details>
-
-<details>
-<summary><b>Advanced features: idle channel, plan claiming & auto-switch</b></summary>
-
-**Idle channel (`/async/*`)** —— free compute released by the vendor during off-peak hours such as late night. Requests queue for a ticket first and are sent to the model automatically when it is their turn (good for unhurried batch jobs). Enable with `async.enabled: true` in `config.yaml`; note it is one-shot with no session memory — include history in the request for multi-turn chats.
-
-**Weekend/trial plan auto-claim (claim)** —— enabled by default. Every 5 minutes the proxy probes the vendor's limited plan campaign page and auto-claims for you the moment a new offer drops (`claim.enabled: false` disables it). Manual claim: `bun run src/index.ts claim`.
-
-**Hybrid plan auto-switch (`planAutoSwitch`)** —— pairs with auto-claim. Accounts can hold both a trial start-plan (points bucket, expires) and a personal coding-plan (rolling windows, resets). Off by default the static `plan` config applies as-is, with no fallback at all; with `planAutoSwitch: true` in config (or `ZCODE_PLAN_AUTO_SWITCH=1`), a background watcher polls both quota planes (`planPollIntervalSec`, default 30s: `billing/balance` for the trial and the `/api/monitor/usage/quota/limit` windows for the coding plan), logs a readable quota line after every probe and routes requests to the first plan in `planPriority` (default `start-plan, coding-plan`; flip it to coding-first with `ZCODE_PLAN_PRIORITY` or the config list) whose watched signals still have quota — `planSwitchRules` narrows which signals count (the trial `BALANCE`, the coding-plan `TOKENS_LIMIT` 5-hour / `TIME_LIMIT` monthly / `WEEK_LIMIT` weekly windows). If the serving plan's gateway rejects a request (start-plan: 401/402/403, HTTP 200 carrying a JSON error envelope — the shape exhaustion takes in the wild, 502/504; coding-plan: a 429 from an emptied window), the same request is retried once on the next plan in the priority list and the rejected plan cools down for 10 minutes until the watcher sees it usable again — so trial credits are never wasted, and coding-plan requests are never blocked by a broken trial tier. When both plans reject the request, the client gets a clean 429 instead of a fake 200 envelope. Separately from the plan tiers, a complete upstream load-balancer failure (502/504) is retried once before it can reach the client. The TUI plan card shows the tier requests actually use with an `(auto)` marker, and the request log row carries a Plan column (`start-plan` / `coding-plan`).
-
-**Quota display (quota)** —— after login the panel queries quota once automatically, then press <kbd>r</kbd> to refresh manually. Data comes from two upstream quota planes: the points bucket for trial/points-based plans (`billing/balance`, remaining / total, expiry), and the usage window for personal coding plans (`/api/monitor/usage/quota/limit`, same source as the official usage panel, **remaining quota** and reset time for the 5-hour / weekly windows — upstream `number` is not a comparable total, so CLI/TUI consistently show only the remainder and draw a ratio bar only when upstream provides a percentage). Query from CLI directly: `bun run src/index.ts quota` (HTTP equivalent `GET /quota`). Note upstream gateways rate-limit frequent queries, so the panel does no timed polling.
-
-</details>
-
-## 🖥️ ZCode Manager (Windows desktop app)
-
-A native Windows 10/11 desktop app ([`desktop/`](desktop/README.md)) manages the
-whole proxy without any terminal: Z.AI OAuth login **and API-key connections**,
-multiple accounts with one-click switching, Coding/Start Plan selection and
-auto-switching, GLM model management, proxy start/stop from the system tray,
-real quota cards, live logs — and one-click **Claude Code** launch in proxy or
-normal mode. Built with Tauri 2 + React + TypeScript; the proxy core runs
-untouched as a managed sidecar (`zcode-proxy.exe`), so end users need neither
-Bun nor Docker. Account credentials live in an AES-256-GCM vault whose key is
-stored in Windows Credential Manager.
-
-See [`desktop/README.md`](desktop/README.md) for installation, usage and
-development instructions.
-
-## 🧮 Available models
-
-The proxy lists these models on `/v1/models` (the list is presentational only — other model names are forwarded as-is, there is no whitelist):
-
-| Model           | Context | Max output | Input       |
-|-----------------|---------|------------|-------------|
-| `glm-5.3`       | 1M      | 128K       | text        |
-| `glm-5.3-flash` | 1M      | 128K       | text + image |
-
-The older GLM generations (`glm-4.5-air` … `glm-5.2`) stay in the internal catalog and still forward when requested; they are simply not advertised.
-
-## ❓ FAQ
-
-**Exits immediately with "Not logged in"?**
-Log in first: `bun run src/index.ts auth login zai` (or bigmodel). One login is enough; credentials are stored encrypted.
-
-**Port 8080 already taken?**
-Switch with an env var: `ZCODE_PROXY_PORT=8081 bun run src/index.ts`, or change `server.port` in `config.yaml`.
-
-**Tool cannot connect / 401?**
-If you set `ZCODE_PROXY_API_KEY`, the tool must use the same value; with it unset there is no password. Note that once a key is enabled, **all routes** except `/webui` (including `/health`) require it.
-
-**Do I need to log in again after switching computers / reinstalling the OS?**
-Yes. Credentials are encrypted bound to the local machine. To migrate, set `ZCODE_PROXY_CREDENTIAL_SECRET` to the same value on both sides, then log in again / copy `~/.zcode-proxy/credentials.json`.
-
-**How do I log in on a server with no browser?**
-Just log in directly: `bun run src/index.ts auth login zai` (or bigmodel). The login link can be opened in a browser on any device and the local machine completes automatically (no callback page needed). For manual exchange there is also paste mode: `auth login bigmodel --paste` — paste back the full redirected URL.
-
-**What does it do in the background?**
-It is just a "translator + messenger": it translates your tool's standard requests into the same requests the official client sends, forwards them upstream, then translates the replies back verbatim. All traffic stays between your machine and the official servers — no third party in between.
-
-## 🛠️ Contributing
-
-```bash
-bun test            # run tests
-bun x tsc --noEmit  # typecheck
-bun run dev         # start panel in dev mode
-```
-
-Architecture and implementation details are documented in comments inside each source file under [`src/`](src/).
-
-## Privacy
-
-This proxy runs fully locally: **no telemetry, no analytics, no outbound reporting of any kind**. Your usage data, device info, and config never leave your machine; debug/dump logs automatically redact API keys, JWTs, and proxy keys.
-
-## License
-
-MIT

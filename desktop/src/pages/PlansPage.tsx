@@ -9,7 +9,7 @@ import { api } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import type { PlanId, ProxyConfig } from "@/lib/types";
 
-export function PlansPage() {
+export function PlansPage({ embedded }: { embedded?: boolean } = {}) {
   const t = useT();
   const state = useApp((s) => s.state);
   const quota = useApp((s) => s.quota);
@@ -106,7 +106,7 @@ export function PlansPage() {
 
   return (
     <>
-      <PageHeader title={t("plansTitle")} subtitle={t("plansSubtitle")} />
+      {!embedded && <PageHeader title={t("plansTitle")} subtitle={t("plansSubtitle")} />}
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
         <ModeCard

@@ -1511,6 +1511,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "harness-auth"
+version = "1.0.0"
+dependencies = [
+ "aes-gcm",
+ "base64 0.22.1",
+ "chrono",
+ "keyring",
+ "rand 0.8.8",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "sha2",
+ "tauri",
+ "tauri-build",
+ "tauri-plugin-dialog",
+ "tauri-plugin-notification",
+ "tauri-plugin-opener",
+ "tauri-plugin-single-instance",
+ "ureq",
+ "uuid",
+ "winreg 0.52.0",
+]
+
+[[package]]
 name = "hashbrown"
 version = "0.12.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5629,30 +5653,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "939f186d9ecebe044315a5cb6d6f78568bbc21152adc954d5a0c2f58bdbc9920"
 dependencies = [
  "serde",
-]
-
-[[package]]
-name = "zcode-manager"
-version = "1.0.0"
-dependencies = [
- "aes-gcm",
- "base64 0.22.1",
- "chrono",
- "keyring",
- "rand 0.8.8",
- "serde",
- "serde_json",
- "serde_yaml",
- "sha2",
- "tauri",
- "tauri-build",
- "tauri-plugin-dialog",
- "tauri-plugin-notification",
- "tauri-plugin-opener",
- "tauri-plugin-single-instance",
- "ureq",
- "uuid",
- "winreg 0.52.0",
 ]
 
 [[package]]

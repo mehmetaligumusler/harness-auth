@@ -1,132 +1,74 @@
-# ZCode Manager — Windows Masaüstü Uygulaması
+# HarnessAuth — Masaüstü Uygulaması (`desktop/`)
 
-ZCode Proxy'yi **tek bir uygulamadan** yöneten Windows 10/11 masaüstü arayüzü:
-Z.AI OAuth hesapları, API Key bağlantıları, Coding/Start Plan, GLM modelleri,
-proxy yaşam döngüsü ve Claude Code CLI entegrasyonu.
+**Claude Code**, **OpenCode**, **Antigravity CLI (`agy`)** ve **ZCode/Z.AI** için Windows 10/11 masaüstü oturum yöneticisi.
 
 | Katman | Teknoloji |
 |---|---|
-| Arayüz | React 18 + TypeScript + Tailwind CSS + Lucide |
-| Uygulama çerçevesi | Tauri 2 (WebView2) |
-| Yerel backend | Rust (süreç yönetimi, kasa, şifreleme, panel istemcisi) |
-| Proxy çekirdeği | Mevcut `zcode-proxy.exe` (yan süreç olarak, **değiştirilmedi**) |
-
-Mimari prensip: **proxy çekirdeğine sıfır dokunuş.** Uygulama, proxy'yi kendi
-kontrol ettiği ortam değişkenleriyle (`ZCODE_PROXY_CONFIG`,
-`ZCODE_PROXY_STORE_DIR`, `ZCODE_PROXY_CREDENTIAL_SECRET`, `ZCODE_PANEL_*`)
-izole bir yan süreç olarak çalıştırır ve mevcut panel kontrol API'sini
-(`POST /api/control`) kullanır.
+| Arayüz | React 18 + TypeScript + Tailwind CSS + Zustand + Lucide |
+| Uygulama çerçevesi | Tauri 2 (WebView2, NSIS installer) |
+| Yerel backend | Rust (`harness-auth`: şifreli kasa, harness adaptörleri, keyring, süreç yönetimi) |
+| Gömülü ZCode motoru | Headless `harness-zcode-engine.exe` (yan süreç / sidecar) |
 
 ---
 
-## Kurulum (son kullanıcı)
+## Mimari
 
-1. `ZCode Manager <sürüm> x64-setup.exe` dosyasını çalıştırın (yönetici
-   hakkı gerekmez, kullanıcı başına kurulum). WebView2 runtime'ı yoksa
-   kurulum sırasında indirilir.
-2. **Bun veya Docker kurulu olmasına gerek yok** — proxy ikilisi
-   (`zcode-proxy.exe`) uygulamanın yanında paketlenmiştir.
+- **Çoklu Harness Oturum Kasası (`src-tauri/src/harness/`):**
+  - `claude_harness.rs`: `~/.claude/settings.json`, `~/.claude/.credentials.json` ve `~/.claude.json` için 5 yöntemli geçiş (`claude_oauth`, `zcode_oauth`, `z_api`, `custom_api`, `disabled`), izole `CLAUDE_CONFIG_DIR` ile yeni OAuth girişi ve otomatik yedekleme.
+  - `opencode.rs`: `%USERPROFILE%\.local\share\opencode\auth.json` ve `%USERPROFILE%\.config\opencode\opencode.json` için 4 yöntemli geçiş (`profile`, `zcode_oauth`, `z_api`, `disabled`), sınırsız sağlayıcı API / ZCode köprüsü / OAuth oturumu ve düzenleme.
+  - `antigravity.rs`: Windows Credential Manager (`gemini:antigravity`) ve `%USERPROFILE%\.gemini\antigravity-cli\antigravity-oauth-token` aynası üzerinden çoklu Google hesabı yönetimi.
+- **ZCode Arka Plan Motoru (`src-tauri/src/proxy.rs`, `vault.rs`):**
+  - `harness-zcode-engine.exe` yalnızca ZCode OAuth aboneliklerini yerel köprü üzerinden sunmak için gizli yan süreç olarak çalıştırılır; konsol/TUI açılmaz.
+  - Uygulama kapanınca isteğe bağlı olarak arka planda çalışmaya devam eder ve yeniden açıldığında devralınır (adopt).
 
-**Portable kullanım:** kurulum istemiyorsanız kurulumdan çıkan
-`ZCode Manager.exe` + `zcode-proxy.exe` dosyalarını aynı klasöre koyup
-doğrudan çalıştırın.
+---
 
-## İlk kullanım
+## Veri ve Güvenlik
 
-1. Uygulamayı açın → **Hesaplar** sayfası.
-2. İki bağlantı türünden birini ekleyin:
-   - **OAuth ile giriş yap**: Tarayıcıda Z.AI/BigModel hesabınıza giriş
-     yapın; oturum uygulama içinde otomatik tamamlanır. Kimlik bilgileri
-     Windows Credential Manager tarafından korunan bir anahtarla
-     şifrelenerek kasada saklanır.
-   - **API Key ekle**: Z.AI veya BigModel API anahtarınızı girin.
-     API Key bağlantıları Anthropic uyumlu (Coding Plan) endpoint'ini
-     kullanır; standart anahtarlar **bakiyeden** ücretlendirilir ve Coding
-     Plan kotanızı kullanmaz.
-3. İlk hesap otomatik etkinleşir. **Panel** sayfasından
-   **Proxy'yi Başlat**'ın.
+- Tüm uygulama verisi `%APPDATA%\harness-auth` altında tutulur:
+  - `settings.json`: arayüz ayarları ve aktif harness seçimleri
+  - `accounts.json`: AES-256-GCM şifreli ZCode / Z.AI / BigModel hesap kasası
+  - `sessions.json`: AES-256-GCM şifreli Claude Code / OpenCode / Antigravity oturum kasası
+  - `proxy\config.yaml`, `proxy\store\credentials.json`, `proxy\errors.log`
+  - `launches\`: terminal başlatma betikleri
+  - `tmp\`: izole OAuth girişleri için geçici klasörler (işlem bitince silinir)
+- Ana şifreleme anahtarı **Windows Credential Manager** (`HarnessAuth / master-key`) üzerinde saklanır ve frontend'e asla iletilmez.
+- Tüm JSON dosya güncellemeleri geçici dosya + atomik `rename` ile yapılır; kullanıcının diğer ayarlarına dokunulmaz.
 
-## Günlük kullanım
+---
 
-- **Panel**: proxy durumu, aktif hesap/plan/model, gerçek kota kartları,
-  son istekler ve hatalar. "Claude Code'u Başlat" tek tıkla çalışır.
-- **Hesaplar**: hesap ekle/sil/yeniden adlandır, bağlantı testi (0 maliyetli
-  `/api/paas/v4/models` sorgusu), tek tıkla hesap değiştirme (proxy seçili
-  hesapla yeniden başlar).
-- **Planlar ve Kotalar**: Coding Plan / Start Plan / Otomatik Geçiş
-  (`planAutoSwitch` + `planPriority`). API Key hesaplarında Start Plan
-  kullanılamaz (JWT gerektirir) — arayüz bunu açıkça belirtir.
-- **Modeller**: katalog + proxy'nin listelediği modeller + özel model adları;
-  varsayılan model seçimi, gerçek 1-token'lık erişim testi.
-- **Claude Code**: CLI algılama (kurulu değilse yönergeler), Proxy/Normal
-  mod seçimi, model + proje klasörü ile yeni terminal penceresinde başlatma.
-  Yalnızca açılan pencerenin ortam değişkenleri ayarlanır
-  (`ANTHROPIC_BASE_URL`, `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_MODEL`, …);
-  genel Claude ayarlarınız değişmez. Normal mod tamamen temiz bir ortamla
-  açılır.
-- **Proxy Yönetimi**: sunucu başlat/durdur (süreç ayakta kalır; kota ve
-  loglar erişilebilir olur), süreç yeniden başlatma, port/host/anahtar
-  değişimi (otomatik yeniden başlatma), bağlantı testi.
-- **Loglar**: canlı panel logları (2 sn'de bir) + `errors.log` hata
-  kayıtları, seviye filtreleriyle.
-- **Ayarlar**: tema (koyu/açık), dil (TR/EN), varsayılanlar, Windows
-  açılışında başlatma, tepsiye küçültme, uygulama kapalıyken proxy'yi
-  çalışır tutma, proxy otomatik başlatma.
+## Geliştirme ve Derleme
 
-## Sistem tepsisi
+Önkoşullar: **Bun 1.4+**, **Node.js 22+**, **pnpm 10+**, **Rust (MSVC)**, WebView2.
 
-- Pencere kapatma düğmesi uygulamayı tepsiye küçültür (Ayarlar'dan
-  değiştirilebilir).
-- Tepsi sol tık: pencereyi göster. Menü: göster / proxy aç-kapat / çıkış.
-- Uygulama kapansa da proxy varsayılan olarak çalışmaya devam eder; uygulama
-  yeniden açıldığında süreç otomatik devralınır (adopt).
-
-## Veri ve güvenlik
-
-- Tüm veri `%APPDATA%\zcode-manager` altında:
-  `settings.json`, `accounts.json` (şifreli hesap kasası),
-  `proxy\config.yaml`, `proxy\store\credentials.json` (proxy'nin AES-256-GCM
-  deposu), `proxy\errors.log`.
-- Kasa anahtarı ve proxy credential secret'i **Windows Credential
-  Manager**'da saklanır; frontend'e asla gönderilmez, loglarda gösterilmez.
-- Panel yalnızca `127.0.0.1`'e bağlanır ve rastgele üretilmiş token ile
-  korunur. Proxy varsayılan olarak `127.0.0.1` + rastgele istemci anahtarıyla
-  başlar (Ayarlar → Proxy Yönetimi'nden değiştirilebilir).
-- Claude Code başlatma betikleri katı doğrulamadan geçer; model adları
-  `[A-Za-z0-9._\[\]-]` dışında karakter içeremez (komut enjeksiyonu yok).
-
-## Geliştirme
-
-Önkoşullar: Node 18+, pnpm, Rust (MSVC), WebView2 SDK'ları (VS 2022 C++).
-
-```bash
-# Proxy ikilisi (repo kökünden)
+```powershell
+# Repo kökünden:
 bun install
-bun run build            # -> zcode-proxy.exe
+pnpm --dir desktop install
 
-# Masaüstü uygulaması
-cd desktop
-pnpm install
-pnpm prepare:sidecar     # exe'yi src-tauri/binaries'e kopyalar
-pnpm tauri dev           # geliştirme penceresi
-pnpm tauri build         # NSIS installer + portable exe
+# Headless sidecar motorunu derle (src-tauri/binaries/ içine yazar)
+bun run build:sidecar
+
+# Geliştirme penceresini aç
+bun run dev
+
+# Windows NSIS kurulum dosyasını (.exe) derle
+bun run build:installer
 ```
 
-Çıktılar:
+Üretilen çıktılar:
+- **Installer:** `desktop/src-tauri/target/release/bundle/nsis/HarnessAuth_1.0.0_x64-setup.exe`
+- **Portable:** `desktop/src-tauri/target/release/harness-auth.exe` (yanındaki `harness-zcode-engine.exe` ile)
 
-- Installer: `src-tauri/target/release/bundle/nsis/ZCode Manager_1.0.0_x64-setup.exe`
-- Portable: `src-tauri/target/release/zcode-manager.exe`
-  (+ yanındaki `zcode-proxy.exe`)
+## Testler
 
-### Testler
+```powershell
+# Frontend typecheck + build
+pnpm --dir desktop build
 
-```bash
-cd desktop/src-tauri
-cargo test               # birim testler (kripto, yaml yama, kasa, betik üretimi…)
-cargo test --test e2e    # GERÇEK proxy ikilisiyle yaşam döngüsü testi
-# Gerçek Z.AI hesabıyla (host ZCode kurulumu gerekir):
-ZCM_E2E_REAL=1 cargo test --test e2e real_account_e2e -- --ignored
+# Rust backend birim testleri (tümü izole temp dizinlerinde çalışır)
+cargo test --manifest-path desktop/src-tauri/Cargo.toml --lib
+
+# Gerçek sidecar ile yaşam döngüsü E2E testi
+cargo test --manifest-path desktop/src-tauri/Cargo.toml --test e2e
 ```
-
-`real_account_e2e` gerçek kota snapshot'ı çeker ve 1 token'lık gerçek GLM
-üretimi yapar.

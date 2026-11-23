@@ -6,8 +6,16 @@
 //! manager can read/write the proxy's encrypted credential store and the
 //! store never depends on machine-derived keys.
 
-const SERVICE: &str = "ZCodeManager";
+const SERVICE: &str = "HarnessAuth";
 const ACCOUNT: &str = "master-key";
+
+const LEGACY_SERVICE: &str = "ZCodeManager";
+const LEGACY_ACCOUNT: &str = "master-key";
+
+pub fn read_legacy_zcode_secret() -> Option<String> {
+    let entry = keyring::Entry::new(LEGACY_SERVICE, LEGACY_ACCOUNT).ok()?;
+    entry.get_password().ok().filter(|s| s.len() >= 32)
+}
 
 pub fn load_or_create() -> Result<String, String> {
     let entry = keyring::Entry::new(SERVICE, ACCOUNT).map_err(|e| format!("keyring: {e}"))?;
@@ -36,8 +44,6 @@ pub fn load_or_create() -> Result<String, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     /// Cross-process persistence check: run twice —
     ///   1st: `cargo test keyring_persistence`            (writes)
     ///   2nd: `ZCM_KR_VERIFY=<value> cargo test keyring_persistence` (reads)

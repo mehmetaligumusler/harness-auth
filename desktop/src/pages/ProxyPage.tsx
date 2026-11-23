@@ -1,27 +1,40 @@
 import * as React from "react";
 import { Play, PowerOff, RotateCw, ShieldCheck, Square, Zap } from "lucide-react";
 import { toast } from "sonner";
-import { Badge, Button, Card, CardContent, CardHeader, CardTitle, Input, Label, Select } from "@/components/ui";
+import {
+  Badge,
+  Button,
+  Card,
+  CardContent,
+  CardHeader,
+  CardTitle,
+  Input,
+  Label,
+  Select,
+  Tabs,
+  TabsList,
+  TabsTrigger,
+} from "@/components/ui";
 import { KeyValue, PageHeader, StatusDot } from "@/components/common";
+import { PlansPage } from "@/pages/PlansPage";
+import { ModelsPage } from "@/pages/ModelsPage";
+import { LogsPage } from "@/pages/LogsPage";
 import { useApp, useT } from "@/stores/app";
 import { api } from "@/lib/api";
 
-export function ProxyPage() {
+function ServiceTabContent() {
   const t = useT();
   const state = useApp((s) => s.state);
   const busy = useApp((s) => !!s.busy["proxy"]);
-  const testBusy = useApp((s) => !!s.busy["proxyTest"]);
   const proxyStart = useApp((s) => s.proxyStart);
   const proxyStop = useApp((s) => s.proxyStop);
   const proxyRestart = useApp((s) => s.proxyRestart);
   const proxyKill = useApp((s) => s.proxyKill);
-  const proxyTest = useApp((s) => s.proxyTest);
 
   const [port, setPort] = React.useState("");
   const [host, setHost] = React.useState("127.0.0.1");
   const [apiKey, setApiKey] = React.useState("");
   const [saving, setSaving] = React.useState(false);
-  const [testResult, setTestResult] = React.useState<string | null>(null);
 
   const proxy = state?.proxy;
   const running = !!proxy?.processAlive && !!proxy?.serverRunning;
@@ -43,12 +56,14 @@ export function ProxyPage() {
       const res = await api.saveConfig({
         port: Number(port) || undefined,
         host,
-        ...(apiKey.trim().length >= 8 || apiKey.trim() === "" ? { proxyApiKey: apiKey.trim() } : {}),
+        ...(apiKey.trim().length >= 8 || apiKey.trim() === ""
+          ? { proxyApiKey: apiKey.trim() }
+          : {}),
       });
       setPort(String(res.config.port));
       setHost(res.config.host);
       setApiKey(res.config.proxyApiKey ?? "");
-      toast.success(res.restarted ? "Proxy yeniden başlatıldı" : t("saved"));
+      toast.success(res.restarted ? "Servis yeniden başlatıldı" : t("saved"));
     } catch (e) {
       toast.error(t("errGeneric"), { description: String(e) });
     } finally {
@@ -67,21 +82,6 @@ export function ProxyPage() {
 
   return (
     <>
-      <PageHeader
-        title={t("proxyTitle")}
-        subtitle={t("proxySubtitle")}
-        actions={
-          <Button variant="outline" size="sm" disabled={testBusy} onClick={() => void proxyTest()}>
-            <Zap /> {t("proxyTestConnection")}
-          </Button>
-        }
-      />
-
-      {testResult && (
-        <div className="mb-4 rounded-md border bg-muted/40 px-4 py-2.5 text-sm">{testResult}</div>
-      )}
-
-      {/* Status + controls */}
       <Card className="mb-4">
         <CardHeader className="pb-2">
           <CardTitle className="flex items-center gap-2 text-base">
@@ -146,7 +146,6 @@ export function ProxyPage() {
         </CardContent>
       </Card>
 
-      {/* Server config */}
       <Card>
         <CardHeader className="pb-2">
           <CardTitle className="flex items-center gap-2 text-base">
@@ -201,6 +200,43 @@ export function ProxyPage() {
           </div>
         </CardContent>
       </Card>
+    </>
+  );
+}
+
+export function ProxyPage() {
+  const t = useT();
+  const testBusy = useApp((s) => !!s.busy["proxyTest"]);
+  const proxyTest = useApp((s) => s.proxyTest);
+  const [tab, setTab] = React.useState("service");
+
+  return (
+    <>
+      <PageHeader
+        title={t("navProxy")}
+        subtitle={t("proxySubtitle")}
+        actions={
+          <Button variant="outline" size="sm" disabled={testBusy} onClick={() => void proxyTest()}>
+            <Zap /> {t("proxyTestConnection")}
+          </Button>
+        }
+      />
+
+      <div className="mb-4">
+        <Tabs value={tab} onValueChange={setTab}>
+          <TabsList>
+            <TabsTrigger value="service">Servis</TabsTrigger>
+            <TabsTrigger value="plans">{t("navPlans")}</TabsTrigger>
+            <TabsTrigger value="models">{t("navModels")}</TabsTrigger>
+            <TabsTrigger value="logs">{t("navLogs")}</TabsTrigger>
+          </TabsList>
+        </Tabs>
+      </div>
+
+      {tab === "service" && <ServiceTabContent />}
+      {tab === "plans" && <PlansPage embedded />}
+      {tab === "models" && <ModelsPage embedded />}
+      {tab === "logs" && <LogsPage embedded />}
     </>
   );
 }

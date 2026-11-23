@@ -1,6 +1,5 @@
 import * as React from "react";
-import { CheckCircle2, KeyRound, LogIn, Pencil, Play, Trash2, UserRound } from "lucide-react";
-import { openUrl } from "@tauri-apps/plugin-opener";
+import { KeyRound, LogIn, Pencil, Play, PowerOff, Trash2, UserRound } from "lucide-react";
 import {
   Badge,
   Button,
@@ -10,174 +9,13 @@ import {
   Input,
   Label,
   Select,
+  Switch,
 } from "@/components/ui";
-import { ConfirmDialog, CopyField, EmptyState, KeyValue, PageHeader } from "@/components/common";
+import { ConfirmDialog, EmptyState, KeyValue, PageHeader } from "@/components/common";
+import { ZCodeApiKeyDialog, ZCodeOAuthDialog } from "@/components/ZCodeDialogs";
 import { useApp, useT } from "@/stores/app";
 import type { AccountSummary } from "@/lib/types";
 import { timeAgo } from "@/lib/utils";
-
-function OAuthDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
-  const t = useT();
-  const [provider, setProvider] = React.useState("zai");
-  const [name, setName] = React.useState("");
-  const startOAuth = useApp((s) => s.startOAuth);
-  const cancelOAuth = useApp((s) => s.cancelOAuth);
-  const oauthUrl = useApp((s) => s.oauthUrl);
-  const oauthRunning = useApp((s) => s.state?.proxy.oauthRunning ?? false);
-  const busy = useApp((s) => !!s.busy["oauth"]);
-
-  React.useEffect(() => {
-    if (!open) {
-      setName("");
-      setProvider("zai");
-    }
-  }, [open]);
-
-  return (
-    <Dialog
-      open={open}
-      onClose={() => {
-        if (oauthRunning) void cancelOAuth();
-        onClose();
-      }}
-      title={t("oauthFlowTitle")}
-      description={t("oauthFlowStarted")}
-      wide={!!oauthUrl || oauthRunning}
-    >
-      {oauthRunning || oauthUrl ? (
-        <div className="space-y-4">
-          {oauthUrl && (
-            <>
-              <div>
-                <Label className="mb-1.5 block">{t("oauthUrlLabel")}</Label>
-                <CopyField value={oauthUrl} />
-              </div>
-              <Button variant="outline" size="sm" onClick={() => void openUrl(oauthUrl)}>
-                {t("oauthOpenBrowser")}
-              </Button>
-            </>
-          )}
-          <div className="flex items-center justify-between rounded-md border bg-muted/40 px-3 py-2.5">
-            <span className="flex items-center gap-2 text-sm text-muted-foreground">
-              <span className="h-2 w-2 animate-pulse rounded-full bg-primary" />
-              {t("oauthWaiting")}
-            </span>
-            <Button variant="ghost" size="sm" onClick={() => void cancelOAuth()}>
-              {t("oauthCancel")}
-            </Button>
-          </div>
-        </div>
-      ) : (
-        <div className="space-y-4">
-          <div className="space-y-1.5">
-            <Label htmlFor="oauth-provider">{t("provider")}</Label>
-            <Select
-              id="oauth-provider"
-              value={provider}
-              onChange={(e) => setProvider(e.target.value)}
-              disabled={busy}
-            >
-              <option value="zai">Z.AI (z.ai)</option>
-              <option value="bigmodel">BigModel (bigmodel.cn)</option>
-            </Select>
-          </div>
-          <div className="space-y-1.5">
-            <Label htmlFor="oauth-name">{t("apiKeyName")}</Label>
-            <Input
-              id="oauth-name"
-              placeholder="Örn. Kişisel Hesabım"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              disabled={busy}
-            />
-          </div>
-          <div className="flex justify-end gap-2">
-            <Button variant="outline" onClick={onClose} disabled={busy}>
-              {t("cancel")}
-            </Button>
-            <Button disabled={busy} onClick={() => void startOAuth(provider, name || undefined)}>
-              <LogIn /> {t("addOAuth")}
-            </Button>
-          </div>
-        </div>
-      )}
-    </Dialog>
-  );
-}
-
-function ApiKeyDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
-  const t = useT();
-  const [name, setName] = React.useState("");
-  const [provider, setProvider] = React.useState("zai");
-  const [apiKey, setApiKey] = React.useState("");
-  const [showKey, setShowKey] = React.useState(false);
-  const addApiKey = useApp((s) => s.addApiKey);
-  const busy = useApp((s) => !!s.busy["addKey"]);
-
-  const submit = async () => {
-    await addApiKey({ name, provider, apiKey });
-    onClose();
-    setName("");
-    setApiKey("");
-  };
-
-  return (
-    <Dialog
-      open={open}
-      onClose={onClose}
-      title={t("addApiKey")}
-      description={t("apiKeyPlanNote")}
-    >
-      <div className="space-y-4">
-        <div className="space-y-1.5">
-          <Label htmlFor="key-name">{t("apiKeyName")}</Label>
-          <Input
-            id="key-name"
-            placeholder="Örn. API Key Hesabım"
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-          />
-        </div>
-        <div className="space-y-1.5">
-          <Label htmlFor="key-provider">{t("apiKeyProvider")}</Label>
-          <Select
-            id="key-provider"
-            value={provider}
-            onChange={(e) => setProvider(e.target.value)}
-          >
-            <option value="zai">Z.AI (api.z.ai)</option>
-            <option value="bigmodel">BigModel (open.bigmodel.cn)</option>
-          </Select>
-        </div>
-        <div className="space-y-1.5">
-          <Label htmlFor="key-value">{t("apiKeyLabel")}</Label>
-          <div className="flex gap-2">
-            <Input
-              id="key-value"
-              type={showKey ? "text" : "password"}
-              autoComplete="off"
-              placeholder="••••••••••••••••"
-              value={apiKey}
-              onChange={(e) => setApiKey(e.target.value)}
-              className="font-mono"
-            />
-            <Button variant="outline" size="sm" onClick={() => setShowKey((v) => !v)}>
-              {showKey ? "Gizle" : "Göster"}
-            </Button>
-          </div>
-        </div>
-        <div className="flex justify-end gap-2">
-          <Button variant="outline" onClick={onClose} disabled={busy}>
-            {t("cancel")}
-          </Button>
-          <Button onClick={() => void submit()} disabled={busy || apiKey.trim().length < 8}>
-            {t("save")}
-          </Button>
-        </div>
-      </div>
-    </Dialog>
-  );
-}
 
 function EditDialog({
   account,
@@ -190,6 +28,7 @@ function EditDialog({
   const [name, setName] = React.useState("");
   const [plan, setPlan] = React.useState("coding-plan");
   const [model, setModel] = React.useState("");
+  const [baseUrl, setBaseUrl] = React.useState("");
   const updateAccount = useApp((s) => s.updateAccount);
   const busy = useApp((s) => !!s.busy["updAcc"]);
 
@@ -198,11 +37,12 @@ function EditDialog({
       setName(account.name);
       setPlan(account.defaultPlan ?? "coding-plan");
       setModel(account.defaultModel ?? "");
+      setBaseUrl(account.baseUrl ?? "");
     }
   }, [account]);
 
   return (
-    <Dialog open={!!account} onClose={onClose} title={t("rename")}>
+    <Dialog open={!!account} onClose={onClose} title={t("edit")}>
       <div className="space-y-4">
         <div className="space-y-1.5">
           <Label htmlFor="edit-name">{t("apiKeyName")}</Label>
@@ -235,6 +75,16 @@ function EditDialog({
             className="font-mono"
           />
         </div>
+        <div className="space-y-1.5">
+          <Label htmlFor="edit-baseurl">{t("baseUrlOptional")}</Label>
+          <Input
+            id="edit-baseurl"
+            placeholder="https://api.z.ai/api/anthropic"
+            value={baseUrl}
+            onChange={(e) => setBaseUrl(e.target.value)}
+            className="font-mono"
+          />
+        </div>
         <div className="flex justify-end gap-2">
           <Button variant="outline" onClick={onClose} disabled={busy}>
             {t("cancel")}
@@ -248,6 +98,7 @@ function EditDialog({
                 name,
                 defaultPlan: account.kind === "api-key" ? undefined : plan,
                 defaultModel: model,
+                baseUrl,
               });
               onClose();
             }}
@@ -263,6 +114,8 @@ function EditDialog({
 function AccountCardView({ account }: { account: AccountSummary }) {
   const t = useT();
   const activate = useApp((s) => s.activateAccount);
+  const deactivate = useApp((s) => s.deactivateAccount);
+  const setAccountEnabled = useApp((s) => s.setAccountEnabled);
   const remove = useApp((s) => s.deleteAccount);
   const test = useApp((s) => s.testAccount);
   const busyMap = useApp((s) => s.busy);
@@ -272,10 +125,22 @@ function AccountCardView({ account }: { account: AccountSummary }) {
   const [testResult, setTestResult] = React.useState<string | null>(null);
 
   const busy =
-    !!busyMap[`actAcc:${account.id}`] || !!busyMap[`delAcc:${account.id}`] || !!busyMap["proxy"];
+    !!busyMap[`actAcc:${account.id}`] ||
+    !!busyMap[`enAcc:${account.id}`] ||
+    !!busyMap[`delAcc:${account.id}`] ||
+    !!busyMap["deactAcc"] ||
+    !!busyMap["proxy"];
 
   return (
-    <Card className={account.active ? "border-primary/60" : undefined}>
+    <Card
+      className={
+        account.active
+          ? "border-primary/60"
+          : !account.enabled
+            ? "opacity-60"
+            : undefined
+      }
+    >
       <CardContent className="p-4">
         <div className="mb-2 flex items-start justify-between gap-2">
           <div className="flex min-w-0 items-center gap-2">
@@ -286,11 +151,16 @@ function AccountCardView({ account }: { account: AccountSummary }) {
             )}
             <span className="truncate font-medium">{account.name}</span>
           </div>
-          <div className="flex shrink-0 items-center gap-1.5">
+          <div className="flex shrink-0 items-center gap-2">
             <Badge variant={account.kind === "oauth" ? "default" : "warning"}>
               {account.kind === "oauth" ? "OAuth" : "API Key"}
             </Badge>
             {account.active && <Badge variant="success">{t("active")}</Badge>}
+            <Switch
+              checked={account.enabled}
+              disabled={busy}
+              onCheckedChange={(v) => void setAccountEnabled(account.id, v)}
+            />
           </div>
         </div>
 
@@ -308,11 +178,10 @@ function AccountCardView({ account }: { account: AccountSummary }) {
           <KeyValue label={t("provider")} value={account.provider === "zai" ? "Z.AI" : "BigModel"} />
           <KeyValue label={t("apiKeyLabel")} value={account.keyHint} mono />
           {account.userHint && <KeyValue label="User" value={account.userHint} mono />}
+          {account.baseUrl && <KeyValue label="Base URL" value={account.baseUrl} mono />}
           <KeyValue
             label={t("selectPlan")}
-            value={
-              account.defaultPlan === "start-plan" ? t("planStart") : t("planCoding")
-            }
+            value={account.defaultPlan === "start-plan" ? t("planStart") : t("planCoding")}
           />
           {account.defaultModel && (
             <KeyValue label={t("defaultModelLabel")} value={account.defaultModel} mono />
@@ -333,9 +202,22 @@ function AccountCardView({ account }: { account: AccountSummary }) {
         )}
 
         <div className="mt-3 flex flex-wrap items-center gap-2">
-          {!account.active && (
+          {account.active ? (
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={busy}
+              onClick={() => void deactivate()}
+            >
+              <PowerOff /> {t("deactivateBtn")}
+            </Button>
+          ) : (
             <>
-              <Button size="sm" disabled={busy} onClick={() => setConfirmActivate(true)}>
+              <Button
+                size="sm"
+                disabled={busy || !account.enabled}
+                onClick={() => setConfirmActivate(true)}
+              >
                 <Play /> {t("activate")}
               </Button>
               <ConfirmDialog
@@ -444,8 +326,8 @@ export function AccountsPage() {
         </div>
       )}
 
-      <OAuthDialog open={oauthOpen} onClose={() => setOauthOpen(false)} />
-      <ApiKeyDialog open={apiKeyOpen} onClose={() => setApiKeyOpen(false)} />
+      <ZCodeOAuthDialog open={oauthOpen} onClose={() => setOauthOpen(false)} />
+      <ZCodeApiKeyDialog open={apiKeyOpen} onClose={() => setApiKeyOpen(false)} />
     </>
   );
 }

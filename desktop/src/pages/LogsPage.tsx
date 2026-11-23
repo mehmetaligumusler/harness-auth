@@ -17,7 +17,7 @@ const KIND_LABELS: Record<string, string> = {
   stream_collect_failed: "Akış toplama hatası",
 };
 
-export function LogsPage() {
+export function LogsPage({ embedded }: { embedded?: boolean } = {}) {
   const t = useT();
   const logs = useApp((s) => s.logs);
   const logsFollow = useApp((s) => s.logsFollow);
@@ -70,7 +70,7 @@ export function LogsPage() {
 
   return (
     <>
-      <PageHeader title={t("logsTitle")} subtitle={t("logsSubtitle")} />
+      {!embedded && <PageHeader title={t("logsTitle")} subtitle={t("logsSubtitle")} />}
 
       <div className="mb-4 flex flex-wrap items-center gap-3">
         <Tabs value={tab} onValueChange={setTab}>

@@ -1,314 +1,82 @@
-name: 🐛 Bug report
-description: Report a reproducible problem with zcode-proxy (502 / empty 200 body / translation error / auth failure, etc.)
+name: Bug report
+description: Report a reproducible problem with HarnessAuth (session switching, OAuth login, API config, installer, or ZCode service)
 title: "[Bug] "
 labels: ["bug", "needs-triage"]
 body:
-  # ---------- Before you file ----------
   - type: markdown
     attributes:
       value: |
-        Thanks for taking the time to report a problem. To speed up diagnosis, do these three things first:
+        Thanks for reporting an issue with **HarnessAuth**. Please check that you are on the latest release and never paste raw API keys, OAuth tokens, or `accounts.json` / `sessions.json` secrets.
 
-        1. **Upgrade to the latest version**: most older bugs are already fixed. Run `git pull` (source) or download the latest Release binary and check that the problem still occurs.
-        2. **Search existing issues**: avoid duplicate reports.
-        3. **Reproduce once with debug mode on**: `zcode-proxy serve debug config.yaml`, then paste the log into the "Diagnostic log" field below.
-
-        If possible, also enable the body dump (10x more detail than the debug-mode body preview):
-
-        ```powershell
-        $env:ZCODE_DUMP_UPSTREAM = "D:\zcodeplus\dumps\trace.jsonl"
-        bun run src/index.ts serve debug config.yaml
-        # or run the exe directly:
-        .\zcode-proxy serve debug config.yaml
-        ```
-
-        Each request produces 4 JSONL lines (client_in / upstream_out / upstream_in / upstream_stream_summary), paired by `reqId`. The dump redacts API keys / JWTs / proxy keys automatically, **but check it once more before pasting**.
-
-  - type: checkboxes
-    id: prerequisites
-    attributes:
-      label: Pre-flight checks
-      description: Confirm each item before submitting
-      options:
-        - label: I reproduced this on the latest version (master or the latest Release)
-          required: true
-        - label: I searched existing issues (including closed ones)
-          required: true
-        - label: I reproduced it once in `serve debug` mode and kept the log
-          required: true
-        - label: I confirmed the API key / JWT / proxy key in the pasted content is redacted
-          required: true
-
-  # ---------- Symptom ----------
   - type: dropdown
-    id: symptom
+    id: harness
     attributes:
-      label: Symptom
-      description: Pick the closest one; list additional symptoms under "Additional context"
+      label: Affected Harness / Area
       options:
-        - 502 upstream_unreachable (cannot reach upstream / DNS / TLS)
-        - 502 translation_failed (OpenAI<->Anthropic translation failed / upstream 4xx/5xx)
-        - 200 but the response body is empty / the stream ends early
-        - 3012 / start-plan rejection (system prompt or fingerprint issue)
-        - 401 / start_plan_jwt_invalid (JWT expired or rejected)
-        - 403 / captcha verification failed (start-plan)
-        - 403 / other auth failure (coding-plan api-key / Bearer)
-        - SSE stream parse error (client reports JSON parse failure / missing fields)
-        - Suspicious field order or format (no error, but wrong behavior)
-        - Translation problem (reasoning/thinking, cache_control, tool_use lost or misplaced)
-        - Startup / config load failure
-        - Other (describe under "Additional context")
+        - Claude Code
+        - OpenCode
+        - Antigravity CLI (agy)
+        - ZCode Accounts / Embedded Engine
+        - Windows Installer / Startup / Tray
+        - UI / Other
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: HarnessAuth version
+      description: Found in Settings → About (or commit hash if built from source)
+      placeholder: "1.0.0"
+    validations:
+      required: true
+
+  - type: input
+    id: os
+    attributes:
+      label: Operating system & CLI version
+      placeholder: "Windows 11 24H2 — claude 2.x / opencode 1.x / agy 1.x"
     validations:
       required: true
 
   - type: textarea
     id: summary
     attributes:
-      label: One-sentence summary
-      description: For example, "streaming Anthropic request: the first delta is missing role=assistant and the client errors"
-      placeholder: "Write a one-sentence summary here"
+      label: Summary
+      placeholder: "Short description of the problem"
     validations:
       required: true
-
-  # ---------- Environment ----------
-  - type: markdown
-    attributes:
-      value: |
-        ## Environment
-
-  - type: input
-    id: version
-    attributes:
-      label: zcode-proxy version
-      description: The string from `zcode-proxy version`; when running from source, use the commit hash
-      placeholder: "2.2.0 or commit 57cfb30"
-    validations:
-      required: true
-
-  - type: dropdown
-    id: runtime
-    attributes:
-      label: How it runs
-      options:
-        - Bun from source (`bun run src/index.ts`)
-        - Bun compiled binary (zcode-proxy.exe / linux-x64 / darwin-arm64, etc.)
-        - Other
-    validations:
-      required: true
-
-  - type: dropdown
-    id: os
-    attributes:
-      label: Operating system
-      options:
-        - Windows
-        - macOS (Apple Silicon)
-        - macOS (Intel)
-        - Linux x64
-        - Linux arm64
-    validations:
-      required: true
-
-  # ---------- Config dimensions ----------
-  - type: markdown
-    attributes:
-      value: |
-        ## The three config dimensions
-
-        zcode-proxy behavior is decided by these three values. **All are required**:
-
-  - type: dropdown
-    id: provider
-    attributes:
-      label: Provider (upstream service)
-      options:
-        - zai (Z.AI)
-        - bigmodel
-    validations:
-      required: true
-
-  - type: dropdown
-    id: plan
-    attributes:
-      label: Plan (billing tier)
-      description: Decides which upstream path is used
-      options:
-        - coding-plan (direct upstream, API key auth)
-        - start-plan (zcode.z.ai gateway, JWT + captcha)
-    validations:
-      required: true
-
-  - type: dropdown
-    id: client_format
-    attributes:
-      label: Client request format
-      description: The format the client sends to zcode-proxy, **not** the upstream format
-      options:
-        - OpenAI (POST /v1/chat/completions)
-        - Anthropic (POST /v1/messages)
-    validations:
-      required: true
-
-  - type: input
-    id: client
-    attributes:
-      label: Client type + version
-      description: Which tool sent the request; attach a minimal request example when possible
-      placeholder: "For example Claude Code 1.2.3 / Cline 3.5 / curl 8.5 / Python openai 1.50 / @ai-sdk/openai-compatible"
-    validations:
-      required: true
-
-  - type: input
-    id: model
-    attributes:
-      label: Model used
-      placeholder: "For example glm-4.6 / glm-5.2 / glm-4.6v"
-    validations:
-      required: true
-
-  # ---------- Reproduction ----------
-  - type: markdown
-    attributes:
-      value: |
-        ## Reproduction
 
   - type: textarea
     id: repro
     attributes:
       label: Steps to reproduce
-      description: Be as specific as possible; someone else should be able to follow the steps
       placeholder: |
-        1. config.yaml with provider: zai, plan: start-plan, auth: oauth
-        2. Start: `bun run src/index.ts serve debug config.yaml`
-        3. Send a normal chat request with Claude Code: ... (paste the request command or client config)
-        4. Upstream returns 200, but the SSE stream stops halfway and the client reports ...
-      render: shell
+        1. Open HarnessAuth → Claude Code / OpenCode / Antigravity CLI
+        2. Click ...
+        3. Observe ...
     validations:
       required: true
 
   - type: textarea
     id: expected
     attributes:
-      label: Expected behavior
-      placeholder: "The client should receive the complete reply without errors"
+      label: Expected vs Actual behavior
+      placeholder: "What you expected to happen and what happened instead"
     validations:
       required: true
 
   - type: textarea
-    id: actual
+    id: logs
     attributes:
-      label: Actual behavior
-      placeholder: "Client error / stream ends early / missing fields / ..."
-    validations:
-      required: true
-
-  # ---------- Diagnostic log ----------
-  - type: markdown
-    attributes:
-      value: |
-        ## Diagnostic log (required)
-
-        Provide at least the `serve debug` log. **Also providing the `ZCODE_DUMP_UPSTREAM` trace is strongly recommended**: it shows the exact body zcode-proxy sends and the headers / stream the upstream returns, which makes diagnosis about 10x faster.
-
-        Each line of the dump file is a JSON object; pair the 4 phases by `reqId`:
-
-        ```
-        {"reqId":"#001","phase":"client_in",...}      <- the raw request the client sent to zcode-proxy
-        {"reqId":"#001","phase":"upstream_out",...}   <- what zcode-proxy actually sent upstream (the key line)
-        {"reqId":"#001","phase":"upstream_in",...}    <- upstream response status + headers
-        {"reqId":"#001","phase":"upstream_stream_summary",...}  <- total stream bytes + first 4KB sample
-        ```
-
-        > The dump redacts `authorization` / `x-api-key` / `x-zcode-captcha-*` / `proxy-api-key` automatically, but **scan it once more** before pasting.
-
-  - type: textarea
-    id: debug_log
-    attributes:
-      label: serve debug log
-      description: Required. The relevant lines from `zcode-proxy serve debug config.yaml` (including `→ POST` and `← 200/5xx`)
+      label: Logs or error details (redacted)
+      description: Paste relevant lines from Service & Logs or `%APPDATA%\harness-auth\proxy\errors.log` with any tokens/keys replaced by `<redacted>`.
       render: shell
-    validations:
-      required: true
 
-  - type: textarea
-    id: dump
+  - type: checkboxes
+    id: redaction
     attributes:
-      label: ZCODE_DUMP_UPSTREAM trace (strongly recommended)
-      description: All phase lines for the 1-2 failing requests in trace.jsonl (filter by reqId, then paste). If the dump was off, write "not enabled"
-      render: json
-      placeholder: |
-        {"ts":"2026-07-31T13:00:00.000Z","reqId":"#001","phase":"client_in","method":"POST","url":"http://localhost:8080/v1/chat/completions","headers":{...},"body":{...}}
-        {"ts":"2026-07-31T13:00:00.100Z","reqId":"#001","phase":"upstream_out","method":"POST","url":"https://api.z.ai/api/coding/paas/v4/chat/completions","headers":{...},"body":{...},"upstreamFormat":"openai","translateMode":false,"startPlan":false}
-        {"ts":"2026-07-31T13:00:01.000Z","reqId":"#001","phase":"upstream_in","status":200,"statusText":"OK","headers":{...},"isSSE":true,"ttfbMs":900}
-        {"ts":"2026-07-31T13:00:05.000Z","reqId":"#001","phase":"upstream_stream_summary","status":200,"contentEncoding":null,"compressed":false,"totalBytes":12345,"tokensObserved":42,"firstBytesSample":"data: {...}\n\n"}
-
-  # ---------- Optional ----------
-  - type: markdown
-    attributes:
-      value: |
-        ## Optional information
-
-  - type: textarea
-    id: config
-    attributes:
-      label: Key config.yaml excerpt (redacted)
-      description: Paste only behavior-affecting fields (auth.mode / provider / plan / identity / clientIdentity, etc.); **replace API key / proxy key / JWT with `<redacted>`**
-      render: yaml
-      placeholder: |
-        auth:
-          mode: apikey   # or oauth
-        provider: zai
-        plan: start-plan   # or coding-plan
-        identity:
-          appVersion: "3.3.3"
-          sourceTitle: cli
-          refererOrigin: https://zcode.z.ai
-        # clientIdentity:  # paste only when session affinity is in use
-        #   mode: observe
-
-  - type: dropdown
-    id: identity_mode
-    attributes:
-      label: Is clientIdentity (session affinity) in use?
-      description: This decides whether the ordered-transport (raw TCP, order-preserving) path is used
+      label: Privacy check
       options:
-        - Not used (default off)
-        - observe mode
-        - enforce mode (uses raw TCP)
-        - Not sure
-
-  - type: dropdown
-    id: first_time
-    attributes:
-      label: Is this the first occurrence or intermittent?
-      options:
-        - First occurrence
-        - Always (reproduces every time)
-        - Intermittent (provide the trigger conditions)
-        - Started after upgrading to a specific version
-
-  - type: input
-    id: regression_version
-    attributes:
-      label: If this is a regression, the last version that worked
-      placeholder: "For example worked before 2.1.0, broken from 2.2.0"
-
-  - type: textarea
-    id: context
-    attributes:
-      label: Additional context
-      description: Client error screenshots, related issue links, network environment (corporate proxy / VPN / custom DNS), raw upstream response, or anything else you think is relevant
-
-  # ---------- Redaction reminder ----------
-  - type: markdown
-    attributes:
-      value: |
-        ---
-
-        ⚠️ **Check redaction again**. Before submitting, confirm:
-
-        - `auth.apiKey` / `providers.<p>.credential` -> `<redacted>`
-        - `auth.proxyApiKey` -> `<redacted>`
-        - `Authorization: Bearer xxx` / `x-api-key: xxx` in raw client logs outside the dump -> `<redacted>`
-        - OAuth JWT / refresh token -> `<redacted>`
-        - Corporate internal hostnames / IPs (when behind a corporate proxy) -> `<redacted>`
+        - label: I confirmed no API keys, OAuth tokens, or personal credentials are included in this report
+          required: true

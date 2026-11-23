@@ -1,10 +1,10 @@
 //! Proxy child-process management.
 //!
-//! The manager spawns the compiled `zcode-proxy.exe --cli serve` as a child
+//! The manager spawns the compiled `harness-zcode-engine.exe --cli serve` as a child
 //! with an isolated, manager-owned environment:
 //!
-//! - `ZCODE_PROXY_CONFIG`    -> `%APPDATA%\zcode-manager\proxy\config.yaml`
-//! - `ZCODE_PROXY_STORE_DIR` -> `%APPDATA%\zcode-manager\proxy\store`
+//! - `ZCODE_PROXY_CONFIG`    -> `%APPDATA%\harness-auth\proxy\config.yaml`
+//! - `ZCODE_PROXY_STORE_DIR` -> `%APPDATA%\harness-auth\proxy\store`
 //! - `ZCODE_PROXY_CREDENTIAL_SECRET` -> the manager master secret
 //! - `ZCODE_PANEL_ENABLED/TOKEN/PORT/HOST` -> loopback control panel
 //! - `ZCODE_ERROR_LOG`, `ZCODE_LOG_FORMAT=compact`
@@ -35,7 +35,7 @@ const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 /// generated client key).
 pub(crate) fn template(port: u16, host: &str, api_key: &str) -> String {
     format!(
-        r#"# ZCode Manager tarafindan yonetilen ZCode Proxy yapilandirmasi.
+        r#"# HarnessAuth tarafindan yonetilen ZCode arka plan servis yapilandirmasi.
 # Proxy bu dosyayi okur; identity.deviceMid gibi alanlari kendisi yazar.
 server:
   port: {port}

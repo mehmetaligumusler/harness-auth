@@ -1,5 +1,5 @@
-//! End-to-end lifecycle tests against the REAL compiled proxy binary
-//! (`zcode-proxy.exe`). No mocks for the proxy: these tests spawn it as a
+//! End-to-end lifecycle tests against the REAL compiled sidecar binary
+//! (`harness-zcode-engine.exe`). No mocks for the proxy: these tests spawn it as a
 //! child exactly like the app does and drive the panel control API.
 //!
 //! - `proxy_lifecycle_e2e`: fake credential — validates process spawn, panel
@@ -15,28 +15,21 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
-use zcode_manager::credstore;
-use zcode_manager::http;
-use zcode_manager::panel::PanelClient;
-use zcode_manager::paths::Paths;
-use zcode_manager::proxy::{self, ManagedProxy};
-use zcode_manager::settings::Settings;
-use zcode_manager::yamlpatch;
+use harness_auth::credstore;
+use harness_auth::http;
+use harness_auth::panel::PanelClient;
+use harness_auth::paths::Paths;
+use harness_auth::proxy::{self, ManagedProxy};
+use harness_auth::settings::Settings;
+use harness_auth::yamlpatch;
 
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
-fn repo_root() -> PathBuf {
-    // CARGO_MANIFEST_DIR = <repo>/desktop/src-tauri
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .and_then(|p| p.parent())
-        .map(|p| p.to_path_buf())
-        .expect("repo root")
-}
-
 fn proxy_exe() -> PathBuf {
-    let p = repo_root().join("zcode-proxy.exe");
-    assert!(p.is_file(), "proxy exe missing at {}", p.display());
+    let p = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("binaries")
+        .join("harness-zcode-engine-x86_64-pc-windows-msvc.exe");
+    assert!(p.is_file(), "sidecar exe missing at {}", p.display());
     p
 }
 
@@ -56,10 +49,10 @@ impl TempApp {
             chrono_stamp()
         ));
         std::fs::create_dir_all(&dir).unwrap();
-        // Paths::new honors ZCODE_MANAGER_DATA_DIR; cargo runs each test
+        // Paths::new honors HARNESS_AUTH_DATA_DIR; cargo runs each test
         // binary in one process, and this suite serializes, so setting it is
         // safe here.
-        std::env::set_var("ZCODE_MANAGER_DATA_DIR", &dir);
+        std::env::set_var("HARNESS_AUTH_DATA_DIR", &dir);
         let paths = Paths::new();
         paths.ensure_all().unwrap();
         proxy::ensure_proxy_config(&paths).unwrap();
@@ -72,7 +65,7 @@ impl TempApp {
         .unwrap();
         let mut settings = Settings::default();
         settings.panel_port = 0; // force spawn to pick a free panel port
-        let secret = zcode_manager::crypto::random_token();
+        let secret = harness_auth::crypto::random_token();
         Self {
             dir,
             paths,
@@ -107,7 +100,7 @@ impl TempApp {
 impl Drop for TempApp {
     fn drop(&mut self) {
         let _ = std::fs::remove_dir_all(&self.dir);
-        std::env::remove_var("ZCODE_MANAGER_DATA_DIR");
+        std::env::remove_var("HARNESS_AUTH_DATA_DIR");
     }
 }
 

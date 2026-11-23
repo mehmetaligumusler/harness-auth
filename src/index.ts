@@ -35,7 +35,7 @@ import { homedir } from "node:os";
 import { randomUUID } from "node:crypto";
 import { ensureNodeFetchNoTimeouts } from "./runtime/node-fetch-compat.js";
 
-export const VERSION = "4.12.0";
+export const VERSION = "1.0.0";
 
 if (require.main === module) main();
 
@@ -66,37 +66,19 @@ function main(): void {
   try {
     runCli();
   } catch (err) {
-    process.stderr.write(`zcode-proxy: uncaught error: ${(err as Error).stack ?? String(err)}\n`);
+    process.stderr.write(`harness-zcode-engine: uncaught error: ${(err as Error).stack ?? String(err)}\n`);
     process.exit(1);
   }
 }
 
 function runCli(): void {
-  const args = process.argv.slice(2);
-
-  // `--cli` opts out of the default TUI and restores the classic CLI dispatch
-  // (bare `--cli` = the old no-arg default: serve).
-  if (args[0] === "--cli") {
-    dispatchCli(args.slice(1));
-    return;
-  }
-  // Default surface is the TUI. Bare invocation, the retired `tui` token
-  // (kept as a silent alias), and tui-style args (`debug`, `*.yaml`) all land
-  // here — the former `tui <args>` subcommand simply dropped its prefix.
-  if (
-    args.length === 0 ||
-    args[0] === "tui" ||
-    args[0] === "debug" ||
-    args[0].endsWith(".yaml") ||
-    args[0].endsWith(".yml")
-  ) {
-    launchTui(parseServeArgs(args[0] === "tui" ? args.slice(1) : args));
-    return;
-  }
+  const rawArgs = process.argv.slice(2);
+  // Accept legacy `--cli` prefix silently for backward-compatible sidecar calls.
+  const args = rawArgs[0] === "--cli" ? rawArgs.slice(1) : rawArgs;
   dispatchCli(args);
 }
 
-/** Classic CLI dispatch — subcommand routing where bare = serve. */
+/** Headless sidecar dispatch — subcommand routing where bare = serve. */
 function dispatchCli(args: string[]): void {
   const cmd = args[0] ?? "serve";
 
@@ -106,17 +88,13 @@ function dispatchCli(args: string[]): void {
     void claimCommand(args.slice(1));
   } else if (cmd === "quota") {
     void quotaCommand();
-  } else if (cmd === "tui") {
-    // Kept for muscle memory under `--cli`: the default dispatch already
-    // routes `tui` to the TUI, but `--cli tui` should not regress to an error.
-    launchTui(parseServeArgs(args.slice(1)));
-  } else if (cmd === "serve" || cmd.endsWith(".yaml") || cmd.endsWith(".yml")) {
+  } else if (cmd === "serve" || cmd === "debug" || cmd.endsWith(".yaml") || cmd.endsWith(".yml")) {
     const serveArgs = cmd === "serve"
       ? parseServeArgs(args.slice(1))
       : parseServeArgs(args);
     serve(serveArgs.configPath, serveArgs.debug);
   } else if (cmd === "version" || cmd === "--version" || cmd === "-v") {
-    console.log(`zcode-proxy ${VERSION}`);
+    console.log(`harness-zcode-engine ${VERSION}`);
   } else if (cmd === "help" || cmd === "--help" || cmd === "-h") {
     printHelp();
   } else {
@@ -126,46 +104,18 @@ function dispatchCli(args: string[]): void {
   }
 }
 
-function launchTui(args: ServeArgs): void {
-  // Dynamic import: the TUI module imports helpers back from this file, so a
-  // static edge would create a load-time cycle (same pattern as claimCommand).
-  import("./tui/app.js")
-    .then((m) => m.runTui(args))
-    .catch((err: unknown) => {
-      process.stderr.write(`zcode-proxy: tui failed: ${(err as Error).stack ?? String(err)}\n`);
-      process.exit(1);
-    });
-}
-
 function printHelp(): void {
-  console.log(`zcode-proxy ${VERSION}
+  console.log(`harness-zcode-engine ${VERSION}
 
 Usage:
-  zcode-proxy                       Interactive terminal UI (default):
-                                    login, start/stop, live logs
-  zcode-proxy [debug] [config.yaml] Same, with debug diagnostics / custom config
-  zcode-proxy serve [config.yaml]   Start the proxy server (classic CLI mode)
-  zcode-proxy serve debug [config.yaml]
-                                    Start with verbose per-request diagnostics
-  zcode-proxy --cli                 Classic CLI mode (bare --cli = serve)
-  zcode-proxy auth login <provider> Login via OAuth (provider: zai | bigmodel)
-  zcode-proxy auth login <provider> --import
-                                    Import API key from ~/.zcode/v2/config.json
-  zcode-proxy auth logout           Clear stored credentials
-  zcode-proxy auth status           Show current authentication state
-  zcode-proxy claim [list|now]      List / claim weekend-plan trial packages
-  zcode-proxy quota                 Show plan quota (per-model remaining/total)
-  zcode-proxy version               Show version
-  zcode-proxy help                  Show this help
-
-Examples:
-  zcode-proxy                       Terminal UI: login, start/stop, live logs
-  zcode-proxy debug                 Terminal UI with per-request diagnostics
-  zcode-proxy serve debug           CLI: start with extra debug logging
-  zcode-proxy auth login bigmodel   OAuth login for Bigmodel
-  zcode-proxy auth login bigmodel --import
-                                    Import existing key from ZCode config
-  zcode-proxy auth status           Check if logged in
+  harness-zcode-engine serve [debug] [config.yaml]
+  harness-zcode-engine auth login <zai|bigmodel> [--import] [--paste]
+  harness-zcode-engine auth logout
+  harness-zcode-engine auth status
+  harness-zcode-engine claim [list|now]
+  harness-zcode-engine quota
+  harness-zcode-engine version
+  harness-zcode-engine help
 `);
 }
 
@@ -263,7 +213,7 @@ async function startServePanel(
     try {
       const s = await startServer(buildServerOptions(config, auth, false));
       serverRef.current = s;
-      console.log(`zcode-proxy listening on http://${s.hostname}:${s.port}`);
+      console.log(`harness-zcode-engine listening on http://${s.hostname}:${s.port}`);
       return { ok: true, port: s.port };
     } catch (err) {
       return { ok: false, error: (err as Error).message };
@@ -574,7 +524,7 @@ async function serve(configPath: string | undefined, debug: boolean): Promise<vo
   if (ensureConfigFile(path)) {
     ensureDeviceMidInConfig(path);
     console.log(`Created ${path} from bundled template.`);
-    console.log(`Run: zcode-proxy auth login <zai|bigmodel>\n`);
+    console.log(`Run: harness-zcode-engine auth login <zai|bigmodel>\n`);
   }
   const config = loadConfig(path);
 
@@ -586,7 +536,7 @@ async function serve(configPath: string | undefined, debug: boolean): Promise<vo
   const auth = new AuthManager();
   const cred = await loadCredential();
   if (!cred) {
-    console.error("Not logged in. Run: zcode-proxy auth login " + config.provider);
+    console.error("Not logged in. Run: harness-zcode-engine auth login " + config.provider);
     process.exit(1);
   }
   auth.setOAuthCredential(cred);
@@ -598,7 +548,7 @@ async function serve(configPath: string | undefined, debug: boolean): Promise<vo
   // and the lifecycle hooks go through this ref rather than the initial handle.
   const serverRef: { current: ProxyServer | null } = { current: server };
   const url = `http://${server.hostname}:${server.port}`;
-  console.log(`zcode-proxy listening on ${url}`);
+  console.log(`harness-zcode-engine listening on ${url}`);
   // Handles for the background timers started below, so `shutdown` can clear
   // them without the proxy handle being involved (issue #58 review, P2).
   const jobs = createServeJobs(config, auth);
@@ -716,7 +666,7 @@ function authCommand(args: string[]): void {
   } else if (sub === "status") {
     authStatus();
   } else {
-    console.error("Usage: zcode-proxy auth <login|logout|status>");
+    console.error("Usage: harness-zcode-engine auth <login|logout|status>");
     process.exit(1);
   }
 }
@@ -724,7 +674,7 @@ function authCommand(args: string[]): void {
 async function claimCommand(args: string[]): Promise<void> {
   const sub = args[0] ?? "now";
   if (sub !== "list" && sub !== "now") {
-    console.error("Usage: zcode-proxy claim [list|now]");
+    console.error("Usage: harness-zcode-engine claim [list|now]");
     process.exit(1);
   }
   const path = process.env.ZCODE_PROXY_CONFIG ?? "config.yaml";
@@ -911,7 +861,7 @@ async function authStatus(): Promise<void> {
   const cred = await loadCredential();
   if (!cred) {
     console.log("Not logged in.");
-    console.log("Run: zcode-proxy auth login <zai|bigmodel>");
+    console.log("Run: harness-zcode-engine auth login <zai|bigmodel>");
     return;
   }
   console.log(`Logged in: ${cred.provider}`);

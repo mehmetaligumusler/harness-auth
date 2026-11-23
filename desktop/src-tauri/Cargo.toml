@@ -1,8 +1,8 @@
 [package]
-name = "zcode-manager"
+name = "harness-auth"
 version = "1.0.0"
-description = "ZCode Manager — Windows desktop management app for the ZCode Proxy"
-authors = ["ZCodeProxy contributors"]
+description = "HarnessAuth — Desktop session manager for Claude Code, OpenCode, Antigravity CLI and ZCode"
+authors = ["HarnessAuth contributors"]
 edition = "2021"
 rust-version = "1.77"
 

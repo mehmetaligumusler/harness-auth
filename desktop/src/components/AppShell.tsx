@@ -1,13 +1,13 @@
 // App shell: sidebar navigation + main content area.
 
 import {
-  Bot,
+  Code2,
   Gauge,
   KeyRound,
-  Layers,
-  Monitor,
-  Notebook,
   Settings as SettingsIcon,
+  ShieldCheck,
+  Sparkles,
+  Terminal,
   Workflow,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -16,12 +16,11 @@ import { useApp, useT, type PageId } from "@/stores/app";
 
 const NAV: Array<{ id: PageId; icon: React.ReactNode; key: Parameters<ReturnType<typeof useT>>[0] }> = [
   { id: "dashboard", icon: <Gauge className="h-4 w-4" />, key: "navDashboard" },
+  { id: "claude", icon: <Terminal className="h-4 w-4" />, key: "navClaude" },
+  { id: "opencode", icon: <Code2 className="h-4 w-4" />, key: "navOpencode" },
+  { id: "antigravity", icon: <Sparkles className="h-4 w-4" />, key: "navAntigravity" },
   { id: "accounts", icon: <KeyRound className="h-4 w-4" />, key: "navAccounts" },
-  { id: "plans", icon: <Layers className="h-4 w-4" />, key: "navPlans" },
-  { id: "models", icon: <Bot className="h-4 w-4" />, key: "navModels" },
-  { id: "claude", icon: <Monitor className="h-4 w-4" />, key: "navClaude" },
   { id: "proxy", icon: <Workflow className="h-4 w-4" />, key: "navProxy" },
-  { id: "logs", icon: <Notebook className="h-4 w-4" />, key: "navLogs" },
   { id: "settings", icon: <SettingsIcon className="h-4 w-4" />, key: "navSettings" },
 ];
 
@@ -38,11 +37,11 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       <aside className="flex w-60 shrink-0 flex-col border-r bg-card">
         <div className="flex items-center gap-2.5 px-5 pb-4 pt-5">
           <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary text-primary-foreground">
-            <Bot className="h-5 w-5" />
+            <ShieldCheck className="h-5 w-5" />
           </div>
           <div>
             <div className="text-sm font-semibold leading-tight">{t("appName")}</div>
-            <div className="text-[11px] text-muted-foreground">ZCode Proxy</div>
+            <div className="text-[11px] text-muted-foreground">AI Session Manager</div>
           </div>
         </div>
 
@@ -69,6 +68,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           <div className="flex items-center gap-2 text-xs text-muted-foreground">
             <StatusDot tone={running ? "running" : proxy?.processAlive ? "warn" : "stopped"} />
             <span>
+              ZCode:{" "}
               {running
                 ? t("statusRunning")
                 : proxy?.processAlive

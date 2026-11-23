@@ -1,5 +1,5 @@
-blank_issues_enabled: false
+blank_issues_enabled: true
 contact_links:
-  - name: 📖 Documentation
-    url: https://github.com/tridefender/zcode-proxy/blob/master/README.md
-    about: Read the README first. Most configuration questions (auth / provider / plan / endpoints / model list) are answered there.
+  - name: Documentation
+    url: https://github.com/KilimcininKorOglu/zcode-api/blob/master/README.md
+    about: Read the HarnessAuth README for setup, harness configuration, and build instructions.

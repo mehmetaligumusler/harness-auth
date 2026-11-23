@@ -1,4 +1,4 @@
-//! OAuth login flow via the proxy CLI child (`zcode-proxy --cli auth login`).
+//! OAuth login flow via the headless sidecar (`harness-zcode-engine auth login`).
 //!
 //! The CLI prints the authorize URL on stdout and opens the default browser
 //! itself; it then polls the provider server-side and writes the resolved

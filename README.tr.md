@@ -2,363 +2,91 @@
 
 [English](README.md) | **Türkçe**
 
-[![Release](https://img.shields.io/github/v/release/KilimcininKorOglu/zcode-api)](https://github.com/KilimcininKorOglu/zcode-api/releases)
-[![CI](https://github.com/KilimcininKorOglu/zcode-api/actions/workflows/ci.yml/badge.svg)](https://github.com/KilimcininKorOglu/zcode-api/actions/workflows/ci.yml)
+# HarnessAuth
 
-<img src="docs/images/zcode-app-icon.png" width="88" alt="ZCode Proxy icon" />
+**Claude Code, OpenCode, Antigravity CLI (`agy`) ve ZCode/Z.AI oturumlarını tek bir masaüstü uygulamasından yönetin.**
 
-# ZCode Proxy
-
-**GLM coding planınızı her AI kodlama aracına bağlayın.**
-
-Kendi bilgisayarınızda çalışan küçük bir araç: Zhipu Z.AI / Bigmodel coding planları (kişisel plan / deneme planı)
-normalde yalnız resmi client içinde çalışır. ZCode Proxy bu planları yerel olarak standart OpenAI / Anthropic API'leri
-olarak sunar; böylece Claude Code, Codex, Silly Tavern ... plan kotanızı doğrudan kullanabilir.
-
-[Hızlı başlangıç](#-bir-dakikalık-hızlı-başlangıç) · [Kodlama araçlarını bağlayın](#-kodlama-araçlarınızı-bağlayın) · [Docker ve yapılandırma](#-docker-ve-yapılandırma) · [SSS](#-sss)
+HarnessAuth, yapay zeka kodlama araçlarınızın (AI harnesses) tüm oturumlarını, OAuth token'larını ve API anahtarlarını **Windows Credential Manager + AES-256-GCM** ile şifrelenmiş tek bir kasada saklayan; istediğiniz sağlayıcıyla sınırsız hesap eklemenizi, düzenlemenizi, tek tıkla geçiş yapmanızı ve devre dışı bırakmanızı (disable) sağlayan **Windows masaüstü uygulamasıdır** (Tauri v2 + Rust + React).
 
 </div>
 
 ---
 
-## Size ne yapar
+## Öne Çıkan Özellikler
 
-- 🧩 **Tek adres, üç format** —— OpenAI, Anthropic ve Responses (yalnız Codex) API'lerinin hepsi yerelde `127.0.0.1:8080` üzerinde servis edilir; aracınız hangi formatı konuşuyorsa onu kullanın.
-- 🖥️ **Görsel panel dahil** —— terminalde açtığınızda görsel bir panel gelir (headless mod da var); başlatma, login ve logları okuma tıklamayla olur, ya da telefonunuzdan yönetin.
-- 💬 **Yerleşik web sohbeti** —— hızlı model denemesi için `/webui` adresindeki ChatGPT tarzı yerel sohbet sayfasını açın.
-- 🌙 **Boş kanal ve anlık plan claim'i** (isteğe bağlı) —— gece yarısı gibi boş saatlerde ücretsiz compute kanalı ve sınırlı deneme planlarının otomatik claim'i, ikisi de içinde.
-- 🔀 **Hibrit plan auto-switch** (isteğe bağlı) —— hem deneme start-plan hem kişisel coding-plan mı tutuyorsunuz? Sırayı kendiniz seçin (`planPriority`): önce bitmek üzere olan deneme kredisini harcayın ya da coding-plan'ı başta tutup 5 saatlik / haftalık penceresi bitince deneme planına düşün (`planAutoSwitch`).
-- 🔌 **Plan içi MCP relay** —— ZCode resmi plugin MCP'lerini (Tianyancha / Wind / Tonghuashun iFinD ...) yerel `/mcp/*` üzerinden aktarır (coding-plan login'i gerektirir, `GET /mcp` listeyi verir); yerleşik web sohbeti kendi MCP sunucularınızı da model aracı olarak ekleyebilir.
-- 🪟 **Tüm platformlar** —— Windows / macOS / Linux tek kod tabanından; ayrıca tek dosyalık binary ya da Docker deployment olarak derlenir.
+### Claude Code (`claude`)
+- **5 Aktif Yöntem Arasında Tek Tıkla Geçiş:**
+  1. **Claude Aboneliği (OAuth):** Çoklu Anthropic Claude Pro/Max OAuth oturumlarını izole `CLAUDE_CONFIG_DIR` ile uygulama içinden ekleyin (`claude auth login`) veya mevcut `~/.claude/.credentials.json` oturumunuzu içe aktarın.
+  2. **ZCode Aboneliği (OAuth Proxy):** Birden fazla ZCode / BigModel OAuth hesabından istediğinizi ve modelini seçin; gömülü arka plan motoru otomatik başlar ve `~/.claude/settings.json` yönlendirilir.
+  3. **Z API (Doğrudan API Key):** Arka plan proxy'si çalıştırmadan doğrudan Z.AI (`https://api.z.ai/api/anthropic`) veya BigModel endpoint'ine bağlanın.
+  4. **Sağlayıcı API Key (`custom_api`):** Anthropic (Resmi API), OpenRouter, DeepSeek, Z.AI, BigModel veya tamamen özel bir sağlayıcı kimliği + Base URL + model ile sınırsız API hesabı ekleyin, düzenleyin ve aktif edin.
+  5. **Devre Dışı (Disable):** Aktif yönlendirmeyi ve kimlik dosyasını temizler; kasada kaydı olmayan canlı bir oturum varsa silmeden önce otomatik yedekler.
+- Global `~/.claude/settings.json` ve `~/.claude.json` dosyalarındaki mevcut hook, izin, tema ve özel env değişkenlerinize dokunmaz.
 
-## 🚀 Bir dakikalık hızlı başlangıç
+### OpenCode (`opencode`)
+- **4 Aktif Yöntem Arasında Tek Tıkla Geçiş:**
+  1. **OpenCode Profili (OAuth / API):** Mevcut `%USERPROFILE%\.local\share\opencode\auth.json` + `opencode.json` oturumunu içe aktarın, izole `OPENCODE_AUTH_PATH` ile `opencode auth login` yapın veya Anthropic, OpenAI, Google, OpenRouter, Z.AI, BigModel ya da özel sağlayıcı kimliğiyle sınırsız API profili ekleyin.
+  2. **ZCode Aboneliği (OAuth Proxy):** Kayıtlı ZCode OAuth hesaplarınızdan istediğinizi + modeli seçip doğrudan OpenCode `provider.zcode` olarak aktif edin.
+  3. **Z API (Doğrudan API Key):** Kayıtlı Z.AI / BigModel API hesaplarını proxy gerekmeden doğrudan OpenCode içine yazın.
+  4. **Devre Dışı (Disable):** Canlı `auth.json` yedeğini koruyarak aktif oturumu ve HarnessAuth tarafından yönetilen provider girdilerini temizler.
+- Tüm kayıtlı API ve ZCode köprü profilleri düzenlenebilir, tek tek etkinleştirilip devre dışı bırakılabilir (enable/disable) ve silinebilir.
 
-### Adım 1: Son `exe`yi [GitHub Releases](https://github.com/KilimcininKorOglu/zcode-api/releases) üzerinden indirin
+### Antigravity CLI (`agy`)
+- Windows Credential Manager (`service: "gemini"`, `account: "antigravity"`) ve `%USERPROFILE%\.gemini\antigravity-cli\antigravity-oauth-token` dosya aynasını şifreli kasada yönetir.
+- Mevcut `agy` oturumunu içe aktarabilir, mevcut oturumu kaybetmeden yeni Google hesabı ekleyebilir, token geçerlilik süresini görebilir, hesaplar arası tek tıkla geçiş yapabilir veya oturumu devre dışı bırakabilirsiniz.
 
-Evet, hepsi bu; gerçekten bu kadar basit.
+### ZCode Hesapları & Gömülü Arka Plan Servisi
+- Z.AI / BigModel OAuth ve API Key hesapları (opsiyonel özel Base URL desteğiyle), hesap bazlı **Etkin / Devre Dışı** anahtarı ve bağlantı testi.
+- Konsol/TUI arayüzü ve Docker kaldırılmıştır; ZCode OAuth köprüsü yalnızca uygulamanın içine gömülü gizli arka plan motoru (`harness-zcode-engine`) olarak çalışır.
+- Coding Plan / Start Plan / Otomatik Geçiş, canlı kota takibi, model testi, canlı loglar, sistem tepsisi ve Windows açılışında otomatik başlatma.
 
-Açtığınızda terminal kontrol paneline girersiniz (asıl arayüz budur):
+---
 
-<img src="docs/images/tui-raw.png" alt="ZCode Proxy terminal kontrol paneli" width="980" />
+## Kurulum
 
-Panelde dört kart vardır: **Login & settings** (provider / plan / login), **Plan usage** (kalan oranı çubuğu + reset geri sayımı, <kbd>r</kbd> ya da Refresh tıklaması), **Proxy service** (başlat/durdur / güncel config), **Logs** (istek başına bir satır, canlı akar; her satır hangi planın servis ettiğini ve `13.0s` / `1m0s` gibi okunabilir süreleri gösterir). Proxy'yi başlatmak için <kbd>s</kbd>ye basın; `Status: running` gördüğünüzde hazırsınız.
+### Son Kullanıcı (Windows 10 / 11)
+1. [GitHub Releases](../../releases) üzerinden **`HarnessAuth_<sürüm>_x64-setup.exe`** kurulum dosyasını indirin ve çalıştırın (yönetici izni gerektirmez).
+2. Ek olarak Bun, Node.js veya Docker kurmanıza gerek yoktur; arka plan motoru kurulum paketinin içinde gelir.
 
-> Klavye kısayolu istemiyor musunuz? Paneldeki düğmeler fareyle **tıklanır**. Sessizce arka planda çalışsın mı? `zcode-proxy.exe --cli serve`.
+### Veri Konumu ve Güvenlik
+- Uygulama verileri `%APPDATA%\harness-auth` klasöründe tutulur (`settings.json`, `accounts.json`, `sessions.json`, `proxy\`, `launches\`).
+- Tüm OAuth token'ları ve API anahtarları **Windows Credential Manager** (`HarnessAuth / master-key`) üzerinde saklanan ana anahtarla **AES-256-GCM** şifrelenir; arayüz (frontend) katmanına asla ham sır gönderilmez.
+- Önceki sürümden (`%APPDATA%\zcode-manager`) yükselten kullanıcıların ZCode hesapları ilk açılışta otomatik olarak yeni kasaya taşınır.
 
-### Panel kısayolları
+---
 
-| Tuş                                                       | İşlem                                                                                        |
-|-----------------------------------------------------------|---------------------------------------------------------------------------------------------|
-| <kbd>s</kbd>                                              | Proxy'yi başlat / durdur                                                                     |
-| <kbd>l</kbd>                                              | Güncel providera login (yetkilendirme için tarayıcıyı açar)                                  |
-| <kbd>L</kbd>                                              | bigmodel paste login (yedek mod; `l` login'in kendisi callback istemez, headless çalışır)    |
-| <kbd>o</kbd>                                              | Logout                                                                                       |
-| <kbd>p</kbd> / <kbd>t</kbd>                               | Provider değiştir (Z.AI ↔ Bigmodel) / plan değiştir (coding-plan ↔ start-plan)               |
-| <kbd>r</kbd>                                              | Plan kullanımını yenile                                                                      |
-| <kbd>↑</kbd><kbd>↓</kbd> / <kbd>PgUp</kbd> / <kbd>g</kbd> | Logları kaydır / en alta atla                                                                |
-| <kbd>c</kbd>                                              | Log ekranını temizle                                                                         |
-| <kbd>q</kbd>                                              | Panelden çık                                                                                 |
+## Geliştirme ve Paketleme (Build)
 
-## 🔌 Kodlama araçlarınızı bağlayın
-
-Proxy çalışırken yerel adres **`http://127.0.0.1:8080`**dür. Aracınızda yalnız iki şeyi değiştirirsiniz: **base URL** ve **model adı**.
-
-"API Key" hakkında: config'te `auth.proxyApiKey` (ya da `ZCODE_PROXY_API_KEY` env'i) ayarladıysanız aracınıza aynı değeri girin; ayarlamadıysanız herhangi bir değer (örn. `sk-1234`) çalışır; yerel kullanımda doğrulama yapılmaz.
-
-<details>
-<summary><b>Claude Code</b> (tıklayıp açın)</summary>
-
-Tek shell oturumu için env değişkenleri:
-
-```bash
-# macOS / Linux
-export ANTHROPIC_BASE_URL=http://127.0.0.1:8080
-export ANTHROPIC_AUTH_TOKEN=sk-1234
-export ANTHROPIC_MODEL=glm-4.7
-claude
-```
+Gereksinimler: **Bun 1.4+**, **Node.js 22+**, **pnpm 10+**, **Rust (stable, MSVC)**.
 
 ```powershell
-# Windows PowerShell
-$env:ANTHROPIC_BASE_URL = "http://127.0.0.1:8080"
-$env:ANTHROPIC_AUTH_TOKEN = "sk-1234"
-$env:ANTHROPIC_MODEL = "glm-4.7"
-claude
+# 1. Bağımlılıkları yükle
+bun install
+pnpm --dir desktop install
+
+# 2. Gömülü headless ZCode motorunu derle
+bun run build:sidecar
+
+# 3. Masaüstü uygulamasını geliştirme modunda başlat
+bun run dev
+
+# 4. Windows NSIS kurulum dosyasını (.exe) derle
+bun run build:installer
 ```
 
-Ya da her Claude Code oturumunda kalıcı olsun diye `~/.claude/settings.json` içine yazın (aynı değişkenler, shell'e gerek yok):
+Üretilen kurulum paketi: `desktop/src-tauri/target/release/bundle/nsis/HarnessAuth_1.0.0_x64-setup.exe`.
 
-```json
-{
-  "env": {
-    "ANTHROPIC_BASE_URL": "http://127.0.0.1:8080",
-    "ANTHROPIC_AUTH_TOKEN": "sk-1234",
-    "ANTHROPIC_MODEL": "glm-4.7"
-  }
-}
+Ayrıntılı masaüstü mimarisi için [desktop/README.md](desktop/README.md) dosyasına bakabilirsiniz.
+
+## Testler
+
+```powershell
+# Headless ZCode motor testleri
+bun test
+
+# Masaüstü frontend typecheck + production build
+pnpm --dir desktop build
+
+# Rust backend birim testleri (gerçek kullanıcı dosyalarına dokunmaz)
+cargo test --manifest-path desktop/src-tauri/Cargo.toml --lib
 ```
-
-</details>
-
-<details>
-<summary><b>Codex CLI</b> (Responses API üzerinden)</summary>
-
-`~/.codex/config.toml` dosyasını düzenleyin:
-
-```toml
-model_provider = "zcode"
-model = "glm-5.3"
-
-[model_providers.zcode]
-name = "ZCode Proxy"
-base_url = "http://127.0.0.1:8080/v1"
-wire_api = "responses"
-env_key = "ZCODE_API_KEY"   # proxy key set etmediyseniz boş olmayan herhangi bir değer çalışır
-```
-
-</details>
-
-<details>
-<summary><b>Diğer OpenAI uyumlu araçlar</b> (Cherry Studio, Kilo Code, Cline, LobeChat...)</summary>
-
-Aracın "Custom Provider" ayarlarına şunları girin:
-
-| Ayar                   | Değer                                                         |
-|------------------------|---------------------------------------------------------------|
-| API adresi (Base URL)  | `http://127.0.0.1:8080/v1`                                    |
-| API Key                | Proxy key'iniz (ayarlanmadıysa herhangi bir değer)            |
-| Model                  | `glm-4.7`, `glm-5.3`, `glm-4.6v` vb., model tablosuna bakın   |
-
-Anthropic formatını konuşan araçlar için (bazı Claude client'ları gibi) adresi `http://127.0.0.1:8080` yapın; `/v1/messages` yolu otomatik karşılanır.
-
-</details>
-
-Önce elle denemek ister misiniz? Yerleşik sohbet sayfası için **http://127.0.0.1:8080/webui** adresini açın; ya da curl kullanın:
-
-```bash
-curl http://127.0.0.1:8080/v1/chat/completions -H "Content-Type: application/json" -d '{
-  "model": "glm-5.3-flash",
-  "messages": [{"role": "user", "content": "Hello!"}]
-}'
-```
-
-## 🐳 Docker ve yapılandırma
-
-<details>
-<summary><b>Docker deployment</b></summary>
-
-**En kolay yol, bu repodaki Compose.** Kalıcı her şey `./docker-data/` içinde (config + credentials), proxy'ye `http://127.0.0.1:8080` üzerinden erişilir, log zaman damgaları Europe/Istanbul saatine göre basılır:
-
-```bash
-git clone https://github.com/KilimcininKorOglu/zcode-api && cd zcode-api
-mkdir -p docker-data
-echo 'ZCODE_PROXY_CREDENTIAL_SECRET=sadece-sizin-bildiginiz-bir-parola' > .env
-
-# Bir kez login olun (sunucuda tarayıcı gerekmez: basılan bağlantıyı herhangi
-# bir cihazda açın, login otomatik tamamlanır). Credential docker-data/credentials.json
-# içinde saklanır ve container yeniden kurulumunda da kalır.
-docker compose run --rm zcode-proxy bun run src/index.ts auth login zai
-
-docker compose up -d --build
-```
-
-Çalışan container'ı `docker-data/config.yaml` üzerinden ayarlayın (ilk açılışta otomatik oluşur, tamamen yorumlu): hibrit plan auto-switch için oraya `planAutoSwitch: true` yazın (canlı uygulanır, restart gerekmez). Sonraki güncellemeler `git pull && docker compose up -d --build` (build + recreate tek komutta).
-
-**Ya da klonlamadan hazır image** (multi-arch amd64 / arm64, `bun` kullanıcısıyla çalışır):
-
-```bash
-# Host'ta sabit bir şifreleme seed'iyle login olun (iki provider da callback'sizdir:
-# bağlantıyı herhangi bir cihazda açın, login otomatik tamamlanır)
-ZCODE_PROXY_CREDENTIAL_SECRET="sadece-sizin-bildiginiz-bir-parola" \
-  bun run src/index.ts auth login zai
-
-docker run -d --name zcode-proxy -p 8080:8080 \
-  -v "$(pwd)/config.yaml:/data/config.yaml:ro" \
-  -v "$(HOME)/.zcode-proxy/credentials.json:/home/bun/.zcode-proxy/credentials.json:ro" \
-  -e ZCODE_PROXY_CREDENTIAL_SECRET="sadece-sizin-bildiginiz-bir-parola" \
-  ghcr.io/kilimcininkoroglu/zcode-proxy:latest
-```
-
-```yaml
-services:
-  zcode-proxy:
-    image: ghcr.io/kilimcininkoroglu/zcode-proxy:latest
-    ports: ["8080:8080"]
-    volumes:
-      - ./config.yaml:/data/config.yaml:ro
-      - ./credentials.json:/home/bun/.zcode-proxy/credentials.json:ro
-    environment:
-      ZCODE_PROXY_CREDENTIAL_SECRET: "sadece-sizin-bildiginiz-bir-parola"
-    restart: unless-stopped
-```
-
-</details>
-
-<details>
-<summary><b>Ayarlanabilir config ve env değişkenleri</b> (dokunmadan da çalışır)</summary>
-
-Config dosyası proje kökündeki `config.yaml`dır (ilk açılışta otomatik oluşur, tamamen yorumlu; bkz. [`config.example.yaml`](config.example.yaml)); env değişkenleri önceliklidir. Sık kullanılanlar:
-
-| Env değişkeni                   | Varsayılan       | Açıklama                                                                                                                         |
-|---------------------------------|------------------|----------------------------------------------------------------------------------------------------------------------------------|
-| `ZCODE_PROXY_PORT`              | `8080`           | Dinleme portu                                                                                                                    |
-| `ZCODE_PROXY_API_KEY`           | yok              | Client'ların proxy'ye erişirken kullanacağı key (boş = kontrol yok)                                                              |
-| `ZCODE_PROVIDER`                | `zai`            | Provider `zai` / `bigmodel`                                                                                                      |
-| `ZCODE_PLAN_AUTO_SWITCH`        | off              | Hibrit plan auto-switch için `1`/`true` (`planAutoSwitch`): watcher trafiği, izlenen sinyallerinde kotası kalan `planPriority` sırasındaki ilk planda tutar; reddedilen istek o istek için sıradaki plana düşer. Flag off = hiçbir fallback yok; plan seçimi tamamen sizin config'iniz |
-| `ZCODE_PLAN_PRIORITY`           | `start-plan, coding-plan` | Auto-switch için virgülle ayrılmış plan önceliği (`planPriority`); coding-plan'ı başta tutmak için `coding-plan, start-plan` gibi |
-| `ZCODE_PLAN_POLL_INTERVAL_SEC`  | `30`             | Auto-switch poll aralığı, saniye (`planPollIntervalSec`) |
-| `ZCODE_PLAN_AUTO_RESET`         | on               | `planAutoReset`i kapatmak için `off`/`false`: 5 saatlik pencere reset haklarının otomatik kullanımı (eşik / expire / 429 tetikleri) |
-| `ZCODE_BATCH_AS_STREAM`         | on               | `batchAsStream`ı kapatmak için `0`/`false`: batch (stream olmayan) istekler upstream'e stream olarak gider ve tek JSON'a birleştirilir; çünkü upstream gateway ~180 saniyeyi aşan sessiz non-streaming istekleri öldürür (belirti: tam ~3 dakika sonra 502) |
-| `ZCODE_PROXY_CONFIG`            | `config.yaml`    | Config dosyası yolu                                                                                                              |
-| `ZCODE_PROXY_CREDENTIAL_SECRET` | makineye özel    | Login credential'larının şifreleme seed'i (makine taşımada / Docker'da sabitleyin; compose gitignored `.env`den okur, bkz. `.env.example`) |
-| `ZCODE_LOG_FORMAT`              | desktop table    | Tek satırlık loglar için `compact` (dar ekranlar)                                                                                |
-| `ZCODE_PANEL_ENABLED`           | off              | Headless `serve` modunun (Docker dahil) da yerel web panel başlatması için `1`/`true`                                            |
-| `ZCODE_PANEL_TOKEN`             | yok              | Panel erişim tokenı, **panel açıkken zorunlu** (token olmadan panel açılmayı reddeder; kontrol API'sinin açıkta kalmaması için) |
-| `ZCODE_PANEL_PORT`              | `8090`           | Panel portu                                                                                                                      |
-| `ZCODE_PANEL_HOST`              | `127.0.0.1`      | Panel dinleme adresi. Docker bridge ağında loopback bind'ı `-p` ile haritalanamaz, bu yüzden orada `0.0.0.0` yapın; **güçlü bir token** ile kullanın ve portu asla dış dünyaya doğrudan açmayın |
-| `ZCODE_UPDATE_CHECK`            | on               | "Yeni sürüm var" kontrolünü kapatmak için `off`/`0` (yalnız bildirir, asla otomatik güncellemez)                                 |
-| `ZCODE_UPDATE_SKIP`             | yok              | Yok sayılacak sürümler, virgüllü: örn. `v4.7.6,v4.7.7`                                                                          |
-| `ZCODE_ERROR_LOG`               | `<config dizini>/errors.log` | Kalıcı JSONL hata logu: client'a görünen her 4xx/5xx için bir satır artı arkasındaki hata-sebep olayları (retry, abort, stream hataları). Satırlar boot başına istek id'sini (`a1b2-#007`) ve client/upstream göndermişse client'ın request/session id'sini ve upstream'in `x-request-id`sini taşır. 5 MB'ı aşınca `errors.log.1`e döner |
-
-Plan türü (`plan`: `coding-plan` kişisel / `start-plan` deneme) panelde <kbd>t</kbd> ile değiştirilir ve config.yaml'a geri yazılır.
-
-**Coding-first auto-switch** ("5 saatlik limitim bitti, beni deneme planına geçir" kurulumu): `planAutoSwitch: true` ile config.yaml'a şunu yazın
-
-```yaml
-planPriority:
-  - coding-plan
-  - start-plan
-planSwitchRules:
-  coding-plan:
-    limits: ["TOKENS_LIMIT", "TIME_LIMIT", "WEEK_LIMIT"]   # geçişi tetikleyen 5 saatlik / aylık / haftalık pencereler
-  start-plan:
-    limits: ["BALANCE"]
-```
-
-Watcher her iki planın kotasını yoklar (`planPollIntervalSec`, default 30) ve `planPriority` içinde izlenen sinyallerinde kotasi kalan ilk planı servis eder; reddedilen istek o istek için sıradaki plana da düşer. Fallback, son yoklamada kotasi boş raporlanan bir plana hiç düşmez (token bucket'ı olmayan deneme planı atlanır, client dürüst reddi görür). Yukarıdakilerin hepsi (watcher + fallback) yalnız `planAutoSwitch` açıkken çalışır: off demek ne auto-switch ne fallback demektir.
-
-**Otomatik 5 saatlik pencere reset hakkı** (ZCode panelinin "🎁 N reset available" hediyesi): `planAutoReset` (default açık) ile proxy, resmi istemcinin ritminde `POST /api/v1/coding-plan/reset/opportunity` üzerinden hakları otomatik talep eder ve her `statusPollIntervalSec`te (default 300 sn) `GET /api/v1/coding-plan/reset/status` uçunu yoklayarak eldeki FIVE_HOUR hakkını şu durumlarda harcar: 5h pencere kullanımı `useThresholdPercent`i (default 90) aşarsa, hakkın ömrü `expireGraceSec`in (default 600 sn) altına inerse ya da coding-plan bir 429 dönerse; bu son durumda AYNI istek yeni açılan pencerede tekrar denenir, plan fallback'i hiç çalışmaz. ZCode'un kendi sınıflandırmasındaki geçici hız sınırlaması 429'ları (business code 1302/1303/1305/1312) harcama tetiklemez; `useOn429: false` 429 tetiğini tamamen kapatır. `/use` ucu hangi hakkın harcanacağını seçemez, bu yüzden proxy her harcamadan sonra `/status`u yeniden okur ve sunucu en erken hak dururken daha uzun ömürlü bir hakkı tükettiyse NOTE basar. `auth login` gerekir (zcode JWT); yoksa özellik pasif kalır. Ana anahtar env override'ı: `ZCODE_PLAN_AUTO_RESET`.
-
-```yaml
-planAutoReset:
-  enabled: true
-  useThresholdPercent: 90
-  useOn429: true
-  expireGraceSec: 600
-  statusPollIntervalSec: 300
-```
-
-**Pazarlama ve promosyon hediyesi otomatik alma (`marketing`)**: `marketing` (default açık) ile proxy, resmi istemcinin `MarketingService` davranışını taklit ederek açılışta ve her `intervalSec`te (default 1800 sn / 30 dk) `GET /api/v1/marketing/touch` uçunu yoklar. Hesaba tanımlanan aktif kampanya teslimatları, promosyon kuponları veya ek avantajlar `POST /api/v1/marketing/touch/action` (`action_type: "confirm"`) ile anında onaylanarak hesaba kilitlenir. Env override'ları: `ZCODE_MARKETING_ENABLED`, `ZCODE_MARKETING_INTERVAL_SEC`.
-
-```yaml
-marketing:
-  enabled: true
-  intervalSec: 1800
-```
-
-**config.yaml'ı restart olmadan düzenleme**: çalışan proxy dosyayı izler ve değişikliği yerinde uygular (`[config] reloaded: ...` log satırını izleyin). `claim.auto`, `planAutoSwitch` ya da `plan`ı değiştirmek ilgili arka plan işini başlatır/durdurur; `planPollIntervalSec`i değiştirmek watcher'ı yeni ritimle yeniden başlatır; bozuk bir dosya çalışan config'i korur ve izlemeye devam eder. Yalnız `server` (port/host) restart ister.
-
-TUI'siz sunucularda tarayıcıyı kullanın: `ZCODE_PANEL_ENABLED=1` ve `ZCODE_PANEL_TOKEN=<kendi-rastgele-stringiniz>` verip başlatın, sonra `http://127.0.0.1:8090` adresini SSH ile ileriye taşıyın; durum ve kotayı görebilir, provider/plan değiştirebilir, login/logout yapabilir, canlı logları ve MCP listesini izleyebilirsiniz. Panel varsayılan olarak yalnız loopback'e bağlanır (`ZCODE_PANEL_HOST` ile adres değiştirilebilir, aşağıya bakın), her API çağrısında token ister ve tokensız asla başlamaz; komutlar in-process dağıtılır, ekstra bir kontrol portu açılmaz. Paneldaki "Stop proxy" yalnız proxy'yi durdurur; sürecin kendisi temiz çıkar (SIGTERM/SIGINT ve panel shutdown çıkıştan önce arka plan zamanlayıcılarını, yani auto-claim'i ve captcha pool'unu temizler); panelden logout çalışan credential'ı da temizler ve proxy'yi durdurur, böylece yeni istekler eski hesabın kotasını harcayamaz.
-
-**Yeni sürüm bildirimi**: `serve` ve TUI açılışta GitHub'ın son sürümünü bir kez asenkron kontrol eder; en fazla bir ek log satırı (TUI'de elle kontrol için <kbd>u</kbd>); açılışı asla bloklamaz, proxy'yi etkilemez; çevrimdışı / engelli / rate-limited / değişmiş yanıt şekilleri sessizce yok sayılır. Elle kontrol her zaman net cevap verir ("already latest" ya da "check unavailable"). Container içinde image değiştirilemez olduğu için ipucu çalışma zamanınıza **pull komutunu** gösterir (Docker: `docker compose pull && docker compose up -d`, Podman: `podman compose pull && podman compose up -d`; aksi hâlde "yeni image'i pull edip container'ı yeniden kurun"); dosyalar yerinde değiştirilmez (release'ler checksum taşımaz, o yüzden otomatik indirme yok). Kontrolleri kapatmak için `ZCODE_UPDATE_CHECK=off`, gürültülü bir sürümü susturmak için `ZCODE_UPDATE_SKIP=v4.7.6`.
-
-**Docker içinde panele erişim**: panel varsayılan olarak yalnız **container'ın kendi** `127.0.0.1`inde dinler; default bridge ağda `-p 8080:8080` onu dışarı açamaz; tek başına `-p 8090:8090` eklemek de yetmez (port container'ın non-loopback adresine eşlenir). İki çözüm vardır: ① environment içine `ZCODE_PANEL_HOST=0.0.0.0` ekleyip `-p 8090:8090` verin — panel container'ın tüm arayüzlerine bağlanır; token kesinlikle güçlü olmalı ve 8090 portu dışarıya rastgele açılmamalıdır; ② Linux sunucuda host networking kullanın ki container host loopback'ini paylaşsın:
-
-```yaml
-services:
-  zcode-proxy:
-    # mevcut image / volumes / restart vb. kalsın
-    network_mode: host        # eski ports: satırını kaldırın; host modunda
-    environment:
-      ZCODE_PROXY_CREDENTIAL_SECRET: "sadece-sizin-bildiginiz-bir-parola"
-      ZCODE_PANEL_ENABLED: "1"
-      ZCODE_PANEL_TOKEN: "${ZCODE_PANEL_TOKEN:?önce .env'e panel tokenını yazın}"
-      ZCODE_PANEL_PORT: "8090"
-```
-
-Sonra lokalde yalnız-ileriye bir tünel açın (`-N` = shell yok):
-
-```bash
-ssh -N -L 8090:127.0.0.1:8090 user@host
-```
-
-Ve `http://127.0.0.1:8090` adresini açın. Host modunda ana proxy portu da host portunu doğrudan işgal eder; 8080'e güvenlik grubu/firewall iznini eskisi gibi bırakın ve 8090'ı **asla** dışarı açmayın.
-
-</details>
-
-<details>
-<summary><b>Gelişmiş özellikler: boş kanal, plan claim'i ve auto-switch</b></summary>
-
-**Boş kanal (`/async/*`)** —— vendor'un gece yarısı gibi boş saatlerde serbest bıraktığı ücretsiz compute. İstekler önce ticket kuyruğuna girer, sıra geldiğinde otomatik modele gönderilir (acelesi olmayan batch işler için iyi). `config.yaml`da `async.enabled: true` ile açılır; dikkat: oturumsuz ve tek seferliktir; çok turlu sohbetlerde geçmişi istekle birlikte gönderin.
-
-**Hafta sonu / deneme planı auto-claim (claim)** —— default açık. Proxy 5 dakikada bir vendor'un sınırlı plan kampanya sayfasını yoklar ve yeni teklif düştüğü an sizin için otomatik claim eder (`claim.enabled: false` kapatır). Elle claim: `bun run src/index.ts claim`.
-
-**Hibrit plan auto-switch (`planAutoSwitch`)** —— claim ile birlikte iyi çalışır. Hesabınız hem deneme start-plan (puan kovası, biter) hem kişisel coding-plan (sıralı pencereler, yenilenir) tutabilir. Off iken statik `plan` config'i olduğu gibi uygulanır, hiçbir fallback yoktur; config'te `planAutoSwitch: true` (ya da `ZCODE_PLAN_AUTO_SWITCH=1`) ile arka planda bir watcher her iki kota düzlemini yoklar (`planPollIntervalSec`, default 30 sn: deneme için `billing/balance`, coding-plan için `/api/monitor/usage/quota/limit` pencereleri), her yoklamadan sonra okunabilir bir kota satırı basar ve istekleri `planPriority` içinde izlenen sinyallerinde kotasi kalan ilk plana yönlendirir (default `start-plan, coding-plan`; coding-first için `ZCODE_PLAN_PRIORITY` ya da config listesiyle çevirin) — `planSwitchRules` hangi sinyallerin sayılacağını daraltır (deneme `BALANCE`, coding-plan `TOKENS_LIMIT` 5 saatlik / `TIME_LIMIT` aylık / `WEEK_LIMIT` haftalık pencereler). Servis eden planın gateway'i bir isteği reddederse (start-plan: 401/402/403, JSON hata zarfı taşıyan HTTP 200, tükenmenin sahada aldığı şekil, 502/504; coding-plan: boşalan pencereden 429) aynı istek bir kez öncelik listesindeki sıradaki plana tekrar edilir ve reddedilen plan, watcher onu tekrar kullanılabilir görene dek 10 dakika soğutulur; böylece deneme kredileri boşa gitmez ve coding-plan istekleri bozuk bir deneme katmanı tarafından bloklanmaz. İki plan da isteği reddederse client sahte 200 zarfı yerine temiz bir 429 alır. Plan katmanlarından bağımsız olarak, tam bir upstream load-balancer hatası (502/504) client'a ulaşmadan bir kez tekrar denenir. TUI plan kartı isteklerin gerçekte kullandığı katmanı `(auto)` imzasıyla gösterir ve istek log satırı bir Plan kolonu taşır (`start-plan` / `coding-plan`).
-
-**Kota gösterimi (quota)** —— login sonrası panel kotayı bir kez otomatik sorgular, sonra <kbd>r</kbd> ile elle yenilersiniz. Veri iki upstream kota düzleminden gelir: deneme/puanlı planlar için puan kovası (`billing/balance`, kalan / toplam, son kullanma) ve kişisel coding-planlar için kullanım penceresi (`/api/monitor/usage/quota/limit`, resmi kullanım paneliyle aynı kaynak; 5 saatlik / haftalık pencereler için **kalan kota** ve reset zamanı; upstream `number` karşılaştırılabilir bir toplam olmadığından CLI/TUI hep yalnız kalanı gösterir ve oranı çubuğunu yalnız upstream percentage verince çizer). CLI'dan doğrudan sorgu: `bun run src/index.ts quota` (HTTP karşılığı `GET /quota`). Upstream gateway'ler sık sorguyu rate-limit yaptığından panel zamanlı poll yapmaz.
-
-</details>
-
-## 🖥️ ZCode Manager (Windows masaüstü uygulaması)
-
-Windows 10/11 için yerel masaüstü uygulaması ([`desktop/`](desktop/README.md))
-proxy'yi terminal olmadan yönetir: Z.AI OAuth girişi **ve API Key
-bağlantıları**, tek tıkla geçiş yapılan çoklu hesaplar, Coding/Start Plan
-seçimi ve otomatik geçiş, GLM model yönetimi, sistem tepsisinden proxy
-açma/kapama, gerçek kota kartları, canlı loglar ve tek tıkla **Claude Code**
-başlatma (proxy veya normal mod). Tauri 2 + React + TypeScript ile yazıldı;
-proxy çekirdeği hiç değiştirilmeden yan süreç (`zcode-proxy.exe`) olarak
-çalıştığı için son kullanıcıda Bun ya da Docker gerekmez. Hesap kimlikleri
-anahtarı Windows Credential Manager'da saklanan AES-256-GCM kasasında tutulur.
-
-Kurulum, kullanım ve geliştirme yönergeleri için bkz.
-[`desktop/README.md`](desktop/README.md).
-
-## 🧮 Kullanılabilir modeller
-
-Proxy `/v1/models` altında bu modelleri listeler (liste temsilidir; başka model adları olduğu gibi iletilir, whitelist yoktur):
-
-| Model                       | Context | Maks çıktı | Girdi        |
-|-----------------------------|---------|------------|--------------|
-| `glm-5.3`                   | 1M      | 128K       | metin        |
-| `glm-5.3-flash`             | 1M      | 128K       | metin + görsel |
-
-Eski nesil GLM modelleri (`glm-4.5-air` … `glm-5.2`) katalogda tutulur ve istenirse yine iletilir; yalnız reklam listesinde görünmezler.
-
-## ❓ SSS
-
-**"Not logged in" ile hemen mi kapanıyor?**
-Önce login olun: `bun run src/index.ts auth login zai` (ya da bigmodel). Tek login yeter; credential'lar şifreli saklanır.
-
-**8080 portu dolu mu?**
-Env ile değiştirin: `ZCODE_PROXY_PORT=8081 bun run src/index.ts`, ya da `config.yaml`da `server.port`u değiştirin.
-
-**Araç bağlanamıyor / 401 mi?**
-`ZCODE_PROXY_API_KEY` set ettiyseniz araç aynı değeri kullanmalı; set etmediyseniz parola yoktur. Bir key açıldığında `/webui` dışındaki (dahil `/health`) **tüm yolların** onu istediğini unutmayın.
-
-**Bilgisayar değiştirince / işletim sistemini kurunca tekrar login mi gerek?**
-Evet. Credential'lar yerel makineye bağlı şifrelenir. Taşımak için `ZCODE_PROXY_CREDENTIAL_SECRET`i iki tarafta aynı değere sabitleyin, sonra tekrar login olun / `~/.zcode-proxy/credentials.json`u kopyalayın.
-
-**Tarayıcısı olmayan sunucuda nasıl login olurum?**
-Doğrudan login olun: `bun run src/index.ts auth login zai` (ya da bigmodel). Login bağlantısını herhangi bir cihazın tarayıcısında açabilirsiniz, lokal makine otomatik tamamlar (callback sayfası gerekmez). Manuel takas için paste modu da var: `auth login bigmodel --paste`; yönlendirilen tam URL'yi geri yapıştırın.
-
-**Arka planda ne yapıyor?**
-Sadece bir "çevirmen + kurye": aracınızın standart isteklerini resmi client'ın gönderdiği isteklere çevirir, upstream'e iletir, cevapları aynen geri çevirir. Tüm trafik sizin makinenizle resmi sunucular arasında kalır; arada üçüncü taraf yoktur.
-
-## 🛠️ Katkı
-
-```bash
-bun test            # testleri çalıştır
-bun x tsc --noEmit  # typecheck
-bun run dev         # paneli dev modunda başlat
-```
-
-Mimari ve implementasyon detayları [`src/`](src/) altındaki her kaynak dosyanın içindeki yorumlarda belgelenir.
-
-## Gizlilik
-
-Bu proxy tamamen yerel çalışır: **telemetri yok, analytics yok, hiçbir tür dışa raporlama yok**. Kullanım veriniz, cihaz bilginiz ve config'iniz makinenizden çıkmaz; debug/dump logları API key'leri, JWT'leri ve proxy key'leri otomatik gizler.
-
-## Lisans
-
-MIT

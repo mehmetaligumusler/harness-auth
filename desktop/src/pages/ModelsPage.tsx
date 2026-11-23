@@ -9,7 +9,7 @@ import { MODEL_CATALOG } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 import type { ModelsInfo } from "@/lib/types";
 
-export function ModelsPage() {
+export function ModelsPage({ embedded }: { embedded?: boolean } = {}) {
   const t = useT();
   const state = useApp((s) => s.state);
   const [info, setInfo] = React.useState<ModelsInfo | null>(null);
@@ -135,21 +135,23 @@ export function ModelsPage() {
 
   return (
     <>
-      <PageHeader
-        title={t("modelsTitle")}
-        subtitle={t("modelsSubtitle")}
-        actions={
-          <div className="relative">
-            <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
-            <Input
-              className="w-64 pl-8"
-              placeholder={t("modelsSearchPlaceholder")}
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-            />
-          </div>
-        }
-      />
+      {!embedded && (
+        <PageHeader
+          title={t("modelsTitle")}
+          subtitle={t("modelsSubtitle")}
+          actions={
+            <div className="relative">
+              <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
+              <Input
+                className="w-64 pl-8"
+                placeholder={t("modelsSearchPlaceholder")}
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+              />
+            </div>
+          }
+        />
+      )}
 
       {!running && (
         <div className="mb-4 rounded-md border border-warning/40 bg-warning/10 px-4 py-2.5 text-sm text-warning-foreground">

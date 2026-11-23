@@ -5,6 +5,10 @@ use std::path::Path;
 
 use crate::paths::Paths;
 
+fn default_claude_method() -> String {
+    "disabled".into()
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Settings {
@@ -28,6 +32,21 @@ pub struct Settings {
     pub recent_models: Vec<String>,
     pub log_level: String, // "info" | "debug"
     pub update_check: bool,
+    // Multi-harness active tracking
+    #[serde(default = "default_claude_method")]
+    pub claude_active_method: String, // "claude_oauth" | "zcode_oauth" | "z_api" | "disabled"
+    #[serde(default)]
+    pub claude_active_session_id: Option<String>,
+    #[serde(default)]
+    pub claude_active_model: Option<String>,
+    #[serde(default)]
+    pub opencode_active_session_id: Option<String>,
+    #[serde(default = "default_claude_method")]
+    pub opencode_active_method: String, // "profile" | "zcode_oauth" | "z_api" | "disabled"
+    #[serde(default)]
+    pub opencode_active_model: Option<String>,
+    #[serde(default)]
+    pub antigravity_active_session_id: Option<String>,
 }
 
 impl Default for Settings {
@@ -50,6 +69,13 @@ impl Default for Settings {
             recent_models: Vec::new(),
             log_level: "info".into(),
             update_check: true,
+            claude_active_method: default_claude_method(),
+            claude_active_session_id: None,
+            claude_active_model: None,
+            opencode_active_session_id: None,
+            opencode_active_method: default_claude_method(),
+            opencode_active_model: None,
+            antigravity_active_session_id: None,
         }
     }
 }
@@ -90,10 +116,10 @@ impl Settings {
             )
             .map_err(|e| format!("Run key açılamadı: {e}"))?;
 
-        let existing: Result<String, _> = run.get_value("ZCodeManager");
+        let existing: Result<String, _> = run.get_value("HarnessAuth");
         if !self.autostart_windows {
             if existing.is_ok() {
-                run.delete_value("ZCodeManager")
+                run.delete_value("HarnessAuth")
                     .map_err(|e| format!("Run kaydı silinemedi: {e}"))?;
             }
             return Ok(());
@@ -105,7 +131,7 @@ impl Settings {
             cmd.push_str(" --hidden");
         }
         if existing.as_deref().ok() != Some(cmd.as_str()) {
-            run.set_value("ZCodeManager", &cmd)
+            run.set_value("HarnessAuth", &cmd)
                 .map_err(|e| format!("Run kaydı yazılamadı: {e}"))?;
         }
         Ok(())

@@ -4,16 +4,15 @@ import { create } from "zustand";
 import { toast } from "sonner";
 import { api } from "@/lib/api";
 import { translate, type TranslationKey } from "@/lib/i18n";
-import type { AppStateDto, QuotaSnapshot, TestResult } from "@/lib/types";
+import type { AppStateDto, ClaudeMethod, OpenCodeMethod, QuotaSnapshot, TestResult } from "@/lib/types";
 
 export type PageId =
   | "dashboard"
-  | "accounts"
-  | "plans"
-  | "models"
   | "claude"
+  | "opencode"
+  | "antigravity"
+  | "accounts"
   | "proxy"
-  | "logs"
   | "settings";
 
 interface AppStore {
@@ -48,14 +47,27 @@ interface AppStore {
   // Settings
   saveSettings: (s: AppStateDto["settings"]) => Promise<void>;
 
-  // Accounts
-  addApiKey: (p: { name: string; provider: string; apiKey: string }) => Promise<void>;
-  updateAccount: (p: { id: string; name?: string; defaultPlan?: string; defaultModel?: string }) => Promise<void>;
+  // ZCode Accounts
+  addApiKey: (p: {
+    name: string;
+    provider: string;
+    apiKey: string;
+    baseUrl?: string;
+  }) => Promise<void>;
+  updateAccount: (p: {
+    id: string;
+    name?: string;
+    defaultPlan?: string;
+    defaultModel?: string;
+    baseUrl?: string;
+  }) => Promise<void>;
+  setAccountEnabled: (id: string, enabled: boolean) => Promise<void>;
+  deactivateAccount: () => Promise<void>;
   deleteAccount: (id: string) => Promise<void>;
   activateAccount: (id: string) => Promise<void>;
   testAccount: (id: string) => Promise<TestResult>;
 
-  // OAuth
+  // ZCode OAuth
   startOAuth: (provider: string, name?: string) => Promise<void>;
   cancelOAuth: () => Promise<void>;
 
@@ -65,6 +77,78 @@ interface AppStore {
   proxyRestart: () => Promise<void>;
   proxyKill: () => Promise<void>;
   proxyTest: () => Promise<void>;
+
+  // Multi-harness Sessions
+  updateSession: (id: string, name: string) => Promise<void>;
+  setSessionEnabled: (id: string, enabled: boolean) => Promise<void>;
+  deleteSession: (id: string) => Promise<void>;
+  cancelHarnessOAuth: () => Promise<void>;
+
+  // Claude Code
+  claudeCaptureOAuth: (name?: string) => Promise<void>;
+  claudeStartOAuthLogin: (name?: string) => Promise<void>;
+  claudeAddApiSession: (p: {
+    name: string;
+    providerId: string;
+    apiKey: string;
+    baseUrl?: string;
+    model?: string;
+  }) => Promise<void>;
+  claudeEditSession: (p: {
+    id: string;
+    name?: string;
+    providerId?: string;
+    apiKey?: string;
+    baseUrl?: string;
+    model?: string;
+  }) => Promise<void>;
+  claudeSetMethod: (p: {
+    method: ClaudeMethod;
+    targetId?: string;
+    model?: string;
+    clearOauthCredentials?: boolean;
+  }) => Promise<void>;
+  claudeLaunchFolder: (folder?: string) => Promise<void>;
+
+  // OpenCode
+  opencodeCaptureCurrent: (name?: string) => Promise<void>;
+  opencodeAddApiSession: (p: {
+    name: string;
+    providerId: string;
+    apiKey: string;
+    baseUrl?: string;
+    model?: string;
+  }) => Promise<void>;
+  opencodeAddZcodeSession: (p: {
+    name: string;
+    zcodeAccountId: string;
+    model?: string;
+  }) => Promise<void>;
+  opencodeStartOAuthLogin: (name?: string) => Promise<void>;
+  opencodeActivateSession: (id: string) => Promise<void>;
+  opencodeSetMethod: (p: {
+    method: OpenCodeMethod;
+    targetId?: string;
+    model?: string;
+  }) => Promise<void>;
+  opencodeEditSession: (p: {
+    id: string;
+    name?: string;
+    providerId?: string;
+    apiKey?: string;
+    baseUrl?: string;
+    model?: string;
+    zcodeAccountId?: string;
+  }) => Promise<void>;
+  opencodeDisable: () => Promise<void>;
+  opencodeLaunchFolder: (folder?: string) => Promise<void>;
+
+  // Antigravity CLI
+  antigravityCaptureCurrent: (name?: string) => Promise<void>;
+  antigravityStartOAuthLogin: (name?: string) => Promise<void>;
+  antigravityActivateSession: (id: string) => Promise<void>;
+  antigravityDisable: () => Promise<void>;
+  antigravityLaunchFolder: (folder?: string) => Promise<void>;
 }
 
 async function run<T>(
@@ -179,12 +263,17 @@ export const useApp = create<AppStore>((set, get) => ({
   updateAccount: async (p) => {
     await run("updAcc", set, get, () => api.updateAccount(p), t0("saved"));
   },
+  setAccountEnabled: async (id, enabled) => {
+    await run(`enAcc:${id}`, set, get, () => api.setAccountEnabled(id, enabled), t0("saved"));
+  },
+  deactivateAccount: async () => {
+    await run("deactAcc", set, get, () => api.deactivateAccount(), t0("saved"));
+  },
   deleteAccount: async (id) => {
     await run(`delAcc:${id}`, set, get, () => api.deleteAccount(id), t0("saved"));
   },
   activateAccount: async (id) => {
-    await run(`actAcc:${id}`, set, get, () => api.activateAccount(id));
-    await get().refresh();
+    await run(`actAcc:${id}`, set, get, () => api.activateAccount(id), t0("saved"));
   },
   testAccount: async (id) => {
     return (await run(`testAcc:${id}`, set, get, () => api.testAccount(id))) as TestResult;
@@ -216,6 +305,89 @@ export const useApp = create<AppStore>((set, get) => ({
   },
   proxyTest: async () => {
     await run("proxyTest", set, get, () => api.proxyTest());
+  },
+
+  updateSession: async (id, name) => {
+    await run(`updSess:${id}`, set, get, () => api.updateSession(id, name), t0("saved"));
+  },
+  setSessionEnabled: async (id, enabled) => {
+    await run(`enSess:${id}`, set, get, () => api.setSessionEnabled(id, enabled), t0("saved"));
+  },
+  deleteSession: async (id) => {
+    await run(`delSess:${id}`, set, get, () => api.deleteSession(id), t0("saved"));
+  },
+  cancelHarnessOAuth: async () => {
+    await api.cancelHarnessOAuth();
+    await get().refresh();
+  },
+
+  claudeCaptureOAuth: async (name) => {
+    await run("claudeCapture", set, get, () => api.claudeCaptureOAuth(name), t0("sessionCaptured"));
+  },
+  claudeStartOAuthLogin: async (name) => {
+    await run("claudeOAuth", set, get, () => api.claudeStartOAuthLogin(name));
+  },
+  claudeAddApiSession: async (p) => {
+    await run("claudeAddApi", set, get, () => api.claudeAddApiSession(p), t0("saved"));
+  },
+  claudeEditSession: async (p) => {
+    await run(`claudeEdit:${p.id}`, set, get, () => api.claudeEditSession(p), t0("saved"));
+  },
+  claudeSetMethod: async (p) => {
+    await run("claudeMethod", set, get, () => api.claudeSetMethod(p), t0("saved"));
+  },
+  claudeLaunchFolder: async (folder) => {
+    await run("claudeLaunch", set, get, () => api.claudeLaunchFolder(folder));
+  },
+
+  opencodeCaptureCurrent: async (name) => {
+    await run("ocCapture", set, get, () => api.opencodeCaptureCurrent(name), t0("sessionCaptured"));
+  },
+  opencodeAddApiSession: async (p) => {
+    await run("ocAddApi", set, get, () => api.opencodeAddApiSession(p), t0("saved"));
+  },
+  opencodeAddZcodeSession: async (p) => {
+    await run("ocAddZcode", set, get, () => api.opencodeAddZcodeSession(p), t0("saved"));
+  },
+  opencodeStartOAuthLogin: async (name) => {
+    await run("ocOAuth", set, get, () => api.opencodeStartOAuthLogin(name));
+  },
+  opencodeActivateSession: async (id) => {
+    await run(`ocAct:${id}`, set, get, () => api.opencodeActivateSession(id), t0("saved"));
+  },
+  opencodeSetMethod: async (p) => {
+    await run("ocMethod", set, get, () => api.opencodeSetMethod(p), t0("saved"));
+  },
+  opencodeEditSession: async (p) => {
+    await run(`ocEdit:${p.id}`, set, get, () => api.opencodeEditSession(p), t0("saved"));
+  },
+  opencodeDisable: async () => {
+    await run("ocDisable", set, get, () => api.opencodeDisable(), t0("harnessDisabledOk"));
+  },
+  opencodeLaunchFolder: async (folder) => {
+    await run("ocLaunch", set, get, () => api.opencodeLaunchFolder(folder));
+  },
+
+  antigravityCaptureCurrent: async (name) => {
+    await run(
+      "agyCapture",
+      set,
+      get,
+      () => api.antigravityCaptureCurrent(name),
+      t0("sessionCaptured"),
+    );
+  },
+  antigravityStartOAuthLogin: async (name) => {
+    await run("agyOAuth", set, get, () => api.antigravityStartOAuthLogin(name));
+  },
+  antigravityActivateSession: async (id) => {
+    await run(`agyAct:${id}`, set, get, () => api.antigravityActivateSession(id), t0("saved"));
+  },
+  antigravityDisable: async () => {
+    await run("agyDisable", set, get, () => api.antigravityDisable(), t0("harnessDisabledOk"));
+  },
+  antigravityLaunchFolder: async (folder) => {
+    await run("agyLaunch", set, get, () => api.antigravityLaunchFolder(folder));
   },
 }));
 

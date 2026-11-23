@@ -4,18 +4,18 @@ use tauri::menu::{Menu, MenuItem};
 use tauri::tray::TrayIconBuilder;
 use tauri::{AppHandle, Manager};
 
-pub const TRAY_ID: &str = "zcode-manager-tray";
+pub const TRAY_ID: &str = "harness-auth-tray";
 
 pub fn create(app: &AppHandle) -> tauri::Result<()> {
-    let show = MenuItem::with_id(app, "show", "ZCode Manager'i Göster", true, None::<&str>)?;
-    let toggle = MenuItem::with_id(app, "toggle-proxy", "Proxy'yi Başlat / Durdur", true, None::<&str>)?;
+    let show = MenuItem::with_id(app, "show", "HarnessAuth'u Göster", true, None::<&str>)?;
+    let toggle = MenuItem::with_id(app, "toggle-proxy", "ZCode Servisini Başlat / Durdur", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "Çıkış", true, None::<&str>)?;
     let menu = Menu::with_items(app, &[&show, &toggle, &quit])?;
 
     let mut builder = TrayIconBuilder::with_id(TRAY_ID)
         .menu(&menu)
         .show_menu_on_left_click(false)
-        .tooltip("ZCode Manager")
+        .tooltip("HarnessAuth")
         .on_menu_event(|app, event| match event.id().as_ref() {
             "show" => show_main_window(app),
             "toggle-proxy" => crate::commands::toggle_proxy(app),
@@ -28,7 +28,12 @@ pub fn create(app: &AppHandle) -> tauri::Result<()> {
             _ => {}
         })
         .on_tray_icon_event(|tray, event| {
-            if let tauri::tray::TrayIconEvent::Click { button: tauri::tray::MouseButton::Left, button_state: tauri::tray::MouseButtonState::Up, .. } = event {
+            if let tauri::tray::TrayIconEvent::Click {
+                button: tauri::tray::MouseButton::Left,
+                button_state: tauri::tray::MouseButtonState::Up,
+                ..
+            } = event
+            {
                 show_main_window(tray.app_handle());
             }
         });
@@ -53,9 +58,9 @@ pub fn show_main_window(app: &AppHandle) {
 pub fn update_tooltip(app: &AppHandle, running: bool) {
     if let Some(tray) = app.tray_by_id(TRAY_ID) {
         let text = if running {
-            "ZCode Manager — Proxy çalışıyor"
+            "HarnessAuth — ZCode servisi çalışıyor"
         } else {
-            "ZCode Manager — Proxy durduruldu"
+            "HarnessAuth — ZCode servisi durduruldu"
         };
         let _ = tray.set_tooltip(Some(text));
     }

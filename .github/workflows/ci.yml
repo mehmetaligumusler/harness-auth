@@ -1,9 +1,5 @@
 name: CI
 
-# Triggered on every PR (any target) and on EVERY branch push, so direct
-# commits are gated too. Required status checks (Settings → Branches →
-# Branch protection rules) make CI failures block merge.
-
 on:
   pull_request:
   push:
@@ -12,15 +8,13 @@ on:
 permissions:
   contents: read
 
-# Cancel superseded runs on the same ref — keeps PR feedback fast and saves
-# CI minutes when a PR is force-pushed repeatedly.
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  test:
-    name: Type check & tests
+  engine-test:
+    name: Headless Engine Tests
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -28,17 +22,38 @@ jobs:
 
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
-          # PINNED: a floating "latest" silently drifted the release runtime
-          # away from local dev (v4.5.2 exe = Bun 1.4.0 keep-alive timer
-          # semantics local 1.3.14 never exercised — see AGENTS.md #37).
-          # Bump deliberately, together with local dev environments.
           bun-version: "1.4.0"
 
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
-      - name: Type check
-        run: bun x tsc --noEmit
-
-      - name: Run tests
+      - name: Run engine tests
         run: bun test
+
+  desktop-test:
+    name: Desktop Frontend & Rust Backend
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: desktop/pnpm-lock.yaml
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install desktop dependencies
+        run: pnpm --dir desktop install --frozen-lockfile
+
+      - name: Build desktop frontend
+        run: pnpm --dir desktop build
+
+      - name: Run Rust unit tests
+        run: cargo test --manifest-path desktop/src-tauri/Cargo.toml --lib

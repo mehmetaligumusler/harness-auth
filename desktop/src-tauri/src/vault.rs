@@ -11,6 +11,10 @@ use serde_json::Value;
 
 use crate::crypto;
 
+fn default_true() -> bool {
+    true
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AccountRecord {
@@ -32,6 +36,10 @@ pub struct AccountRecord {
     pub last_used_at: Option<i64>,
     pub default_plan: Option<String>,
     pub default_model: Option<String>,
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    #[serde(default)]
+    pub base_url: Option<String>,
 }
 
 /// What the frontend sees — everything except `encrypted`.
@@ -50,6 +58,8 @@ pub struct AccountSummary {
     pub last_used_at: Option<i64>,
     pub default_plan: Option<String>,
     pub default_model: Option<String>,
+    pub enabled: bool,
+    pub base_url: Option<String>,
     pub active: bool,
 }
 
@@ -68,6 +78,8 @@ impl AccountRecord {
             last_used_at: self.last_used_at,
             default_plan: self.default_plan.clone(),
             default_model: self.default_model.clone(),
+            enabled: self.enabled,
+            base_url: self.base_url.clone(),
             active,
         }
     }
@@ -105,7 +117,7 @@ impl VaultData {
     pub fn active(&self) -> Option<&AccountRecord> {
         self.active_id
             .as_ref()
-            .and_then(|id| self.accounts.iter().find(|a| &a.id == id))
+            .and_then(|id| self.accounts.iter().find(|a| &a.id == id && a.enabled))
     }
 
     pub fn summaries(&self) -> Vec<AccountSummary> {
@@ -118,6 +130,48 @@ impl VaultData {
     pub fn is_active(&self, id: &str) -> bool {
         self.active_id.as_deref() == Some(id)
     }
+}
+
+/// One-time silent migration from legacy `%APPDATA%\zcode-manager\accounts.json`
+/// into the new encrypted vault using the legacy master secret.
+pub fn migrate_legacy_accounts(
+    target_vault_path: &std::path::Path,
+    new_vault_key: &[u8; 32],
+) -> Option<VaultData> {
+    if target_vault_path.exists() {
+        return None;
+    }
+    let legacy_dir = crate::paths::Paths::legacy_zcode_dir()?;
+    let legacy_vault_file = legacy_dir.join("accounts.json");
+    if !legacy_vault_file.is_file() {
+        return None;
+    }
+    let legacy_secret = crate::secret::read_legacy_zcode_secret()?;
+    let legacy_key = crypto::derive_vault_key(&legacy_secret);
+    let legacy = VaultData::load(&legacy_vault_file);
+    if legacy.accounts.is_empty() {
+        return None;
+    }
+    let mut migrated = VaultData {
+        version: legacy.version.max(1),
+        active_id: legacy.active_id.clone(),
+        accounts: Vec::with_capacity(legacy.accounts.len()),
+    };
+    for mut rec in legacy.accounts {
+        let cred = match rec.decrypt_credential(&legacy_key) {
+            Ok(c) => c,
+            Err(_) => continue,
+        };
+        let raw_json = serde_json::to_string(&cred).ok()?;
+        rec.encrypted = crypto::seal(new_vault_key, &raw_json).ok()?;
+        rec.enabled = true;
+        migrated.accounts.push(rec);
+    }
+    if migrated.accounts.is_empty() {
+        return None;
+    }
+    let _ = migrated.save(target_vault_path);
+    Some(migrated)
 }
 
 fn mask_key(api_key: &str) -> String {
@@ -169,7 +223,11 @@ pub fn record_from_credential(
             .get("userId")
             .and_then(|v| v.as_str())
             .map(mask_user),
-        has_jwt: cred.get("jwt").and_then(|v| v.as_str()).map(|s| !s.is_empty()).unwrap_or(false),
+        has_jwt: cred
+            .get("jwt")
+            .and_then(|v| v.as_str())
+            .map(|s| !s.is_empty())
+            .unwrap_or(false),
         has_secret: cred
             .get("secret")
             .and_then(|v| v.as_str())
@@ -180,6 +238,8 @@ pub fn record_from_credential(
         last_used_at: None,
         default_plan: None,
         default_model: None,
+        enabled: true,
+        base_url: None,
     })
 }
 
@@ -202,6 +262,7 @@ mod tests {
         });
         let rec = record_from_credential("Test", "oauth", &cred, &key()).unwrap();
         assert!(rec.has_jwt && rec.has_secret);
+        assert!(rec.enabled);
         assert_eq!(rec.key_hint, "012345…cdef");
         assert_eq!(rec.user_hint.as_deref(), Some("user-123…"));
         let back = rec.decrypt_credential(&key()).unwrap();
@@ -215,9 +276,9 @@ mod tests {
     }
 
     #[test]
-    fn vault_active_lookup() {
+    fn vault_active_lookup_and_disabled() {
         let mut v = VaultData::default();
-        let rec = record_from_credential(
+        let mut rec = record_from_credential(
             "A",
             "api-key",
             &serde_json::json!({"apiKey": "k1234567890", "provider": "zai"}),
@@ -225,9 +286,11 @@ mod tests {
         )
         .unwrap();
         let id = rec.id.clone();
+        rec.enabled = false;
         v.accounts.push(rec);
-        assert!(v.active().is_none());
         v.active_id = Some(id.clone());
+        assert!(v.active().is_none(), "disabled account must not be returned as active");
+        v.accounts[0].enabled = true;
         assert_eq!(v.active().unwrap().id, id);
         assert!(v.is_active(&id));
     }

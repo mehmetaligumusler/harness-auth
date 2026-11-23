@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "ZCode Manager",
+  "productName": "HarnessAuth",
   "version": "1.0.0",
-  "identifier": "com.zcodeproxy.zcode-manager",
+  "identifier": "com.harnessauth.desktop",
   "build": {
     "beforeDevCommand": "node node_modules/vite/bin/vite.js",
     "devUrl": "http://localhost:1420",
@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "ZCode Manager",
+        "title": "HarnessAuth",
         "width": 1260,
         "height": 840,
         "minWidth": 1020,
@@ -30,10 +30,10 @@
     "active": true,
     "targets": ["nsis"],
     "category": "DeveloperTool",
-    "shortDescription": "ZCode Manager",
-    "longDescription": "Windows desktop management app for Z.AI OAuth accounts, API keys, Coding/Start plans, GLM models and Claude Code.",
+    "shortDescription": "HarnessAuth",
+    "longDescription": "Windows desktop session manager for Claude Code, OpenCode, Antigravity CLI and ZCode.",
     "icon": ["icons/icon.ico", "icons/32x32.png", "icons/128x128.png", "icons/128x128@2x.png"],
-    "externalBin": ["binaries/zcode-proxy"],
+    "externalBin": ["binaries/harness-zcode-engine"],
     "windows": {
       "nsis": {
         "installMode": "currentUser",

@@ -5,7 +5,9 @@ use std::sync::Mutex;
 
 use tauri::{Manager, RunEvent, WindowEvent};
 
-use zcode_manager::{commands, oauth, paths, proxy, secret, settings, state::AppState, tray, vault};
+use harness_auth::{
+    commands, crypto, harness, oauth, paths, proxy, secret, settings, state::AppState, tray, vault,
+};
 
 fn main() {
     // Loopback HTTP from the manager must never be routed through a system
@@ -37,6 +39,8 @@ fn main() {
             commands::reset_panel_identity,
             commands::add_api_key_account,
             commands::update_account,
+            commands::set_account_enabled,
+            commands::deactivate_account,
             commands::delete_account,
             commands::activate_account,
             commands::test_account,
@@ -60,6 +64,31 @@ fn main() {
             commands::claude_launch,
             commands::push_recent_folder,
             commands::get_versions,
+            // Multi-harness session commands
+            commands::update_session,
+            commands::set_session_enabled,
+            commands::delete_session,
+            commands::cancel_harness_oauth,
+            commands::claude_capture_oauth,
+            commands::claude_start_oauth_login,
+            commands::claude_add_api_session,
+            commands::claude_edit_session,
+            commands::claude_set_method,
+            commands::claude_launch_folder,
+            commands::opencode_capture_current,
+            commands::opencode_add_api_session,
+            commands::opencode_add_zcode_session,
+            commands::opencode_start_oauth_login,
+            commands::opencode_activate_session,
+            commands::opencode_set_method,
+            commands::opencode_edit_session,
+            commands::opencode_disable,
+            commands::opencode_launch_folder,
+            commands::antigravity_capture_current,
+            commands::antigravity_start_oauth_login,
+            commands::antigravity_activate_session,
+            commands::antigravity_disable,
+            commands::antigravity_launch_folder,
         ])
         .setup(|app| {
             let handle = app.handle();
@@ -79,7 +108,12 @@ fn main() {
 
             // Hidden start (autostart with --hidden, or startMinimized).
             let start_hidden = std::env::args().any(|a| a == "--hidden")
-                || handle.state::<AppState>().settings.lock().unwrap().start_minimized;
+                || handle
+                    .state::<AppState>()
+                    .settings
+                    .lock()
+                    .unwrap()
+                    .start_minimized;
             if start_hidden {
                 if let Some(win) = handle.get_webview_window("main") {
                     let _ = win.hide();
@@ -116,7 +150,7 @@ fn main() {
             }
         })
         .build(tauri::generate_context!())
-        .expect("ZCode Manager başlatılamadı")
+        .expect("HarnessAuth başlatılamadı")
         .run(|app, event| {
             if let RunEvent::Exit = event {
                 cleanup(app);
@@ -134,7 +168,14 @@ fn init_state() -> AppState {
         eprintln!("master secret unavailable ({e}); vault disabled until fixed");
         String::new()
     });
-    let vault = vault::VaultData::load(&paths.vault_file());
+    let vault_key = crypto::derive_vault_key(&secret);
+    let vault = if paths.vault_file().exists() {
+        vault::VaultData::load(&paths.vault_file())
+    } else {
+        vault::migrate_legacy_accounts(&paths.vault_file(), &vault_key)
+            .unwrap_or_else(|| vault::VaultData::load(&paths.vault_file()))
+    };
+    let sessions = harness::SessionVault::load(&paths.sessions_file());
     if let Err(e) = proxy::ensure_proxy_config(&paths) {
         eprintln!("proxy config init failed: {e}");
     }
@@ -142,8 +183,10 @@ fn init_state() -> AppState {
         settings: Mutex::new(settings),
         secret,
         vault: Mutex::new(vault),
+        sessions: Mutex::new(sessions),
         proxy: Mutex::default(),
         oauth: Mutex::default(),
+        harness_oauth: Mutex::default(),
         paths,
     }
 }
@@ -151,6 +194,7 @@ fn init_state() -> AppState {
 fn cleanup(app: &tauri::AppHandle) {
     let state = app.state::<AppState>();
     oauth::cancel(app);
+    commands::cancel_harness_oauth(app.clone());
     let keep = state.settings.lock().unwrap().keep_proxy_on_exit;
     if keep {
         return;
@@ -172,7 +216,7 @@ fn notify_hidden_once(app: &tauri::AppHandle) {
     let _ = app
         .notification()
         .builder()
-        .title("ZCode Manager")
-        .body("Uygulama sistem tepsisine küçültüldü. Proxy arka planda çalışmaya devam ediyor.")
+        .title("HarnessAuth")
+        .body("Uygulama sistem tepsisine küçültüldü. Arka plan servisi çalışmaya devam ediyor.")
         .show();
 }
