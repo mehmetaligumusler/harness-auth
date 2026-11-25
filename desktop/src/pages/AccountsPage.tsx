@@ -114,11 +114,9 @@ export function AccountsPage() {
 
   // Custom Provider (`Özel Model / API`) form
   const [cpName, setCpName] = React.useState("");
-  const [cpSlug, setCpSlug] = React.useState("");
   const [cpPkg, setCpPkg] = React.useState("@opencode/ai/providers/openai-compatible");
   const [cpBase, setCpBase] = React.useState("");
   const [cpKey, setCpKey] = React.useState("local-colab");
-  const [cpDefaultModel, setCpDefaultModel] = React.useState("");
   const [cpModels, setCpModels] = React.useState<CustomModelDef[]>([
     { id: "", name: "", contextLimit: 32768, outputLimit: 4096 },
   ]);
@@ -126,7 +124,6 @@ export function AccountsPage() {
   // Edit & Delete
   const [editTarget, setEditTarget] = React.useState<UnifiedAccountSummary | null>(null);
   const [edName, setEdName] = React.useState("");
-  const [edSlug, setEdSlug] = React.useState("");
   const [edPkg, setEdPkg] = React.useState("");
   const [edBase, setEdBase] = React.useState("");
   const [edKey, setEdKey] = React.useState("");
@@ -139,7 +136,6 @@ export function AccountsPage() {
   const loadEditModal = React.useCallback((acc: UnifiedAccountSummary) => {
     setEditTarget(acc);
     setEdName(acc.name);
-    setEdSlug(acc.provider);
     setEdPkg(acc.package ?? "@opencode/ai/providers/openai-compatible");
     setEdBase(acc.baseUrl ?? "");
     setEdKey("");
@@ -193,27 +189,30 @@ export function AccountsPage() {
 
   const handleSaveEdit = async () => {
     if (!editTarget) return;
+    const cleanEdModels =
+      editTarget.kind === "custom_provider"
+        ? edModels
+            .filter((m) => m.id.trim())
+            .map((m) => ({
+              id: m.id.trim(),
+              name: m.name.trim() || m.id.trim(),
+              contextLimit: m.contextLimit ? Number(m.contextLimit) : null,
+              outputLimit: m.outputLimit ? Number(m.outputLimit) : null,
+            }))
+        : undefined;
     await updateUnifiedAccount({
       id: editTarget.id,
       name: edName.trim(),
-      providerSlug: editTarget.kind === "custom_provider" ? edSlug.trim() : undefined,
       package: editTarget.kind === "custom_provider" ? edPkg : undefined,
       baseUrl: edBase.trim() || undefined,
       apiKey: edKey.trim() || undefined,
       defaultPlan:
         editTarget.kind === "zcode_oauth" || editTarget.kind === "z_api" ? edPlan : undefined,
-      defaultModel: edModel.trim(),
-      models:
+      defaultModel:
         editTarget.kind === "custom_provider"
-          ? edModels
-              .filter((m) => m.id.trim())
-              .map((m) => ({
-                id: m.id.trim(),
-                name: m.name.trim() || m.id.trim(),
-                contextLimit: m.contextLimit ? Number(m.contextLimit) : null,
-                outputLimit: m.outputLimit ? Number(m.outputLimit) : null,
-              }))
-          : undefined,
+          ? cleanEdModels?.[0]?.id ?? ""
+          : edModel.trim(),
+      models: cleanEdModels,
     });
     setEditTarget(null);
   };
@@ -228,25 +227,20 @@ export function AccountsPage() {
         outputLimit: m.outputLimit ? Number(m.outputLimit) : null,
       }));
     const autoSlug =
-      cpSlug.trim() ||
-      cpName.trim() ||
-      cleanModels[0]?.id ||
-      `custom-${Date.now().toString(36)}`;
+      cpName.trim() || cleanModels[0]?.id || `custom-${Date.now().toString(36)}`;
     await addCustomProvider({
       name: cpName.trim() || autoSlug,
       providerSlug: autoSlug,
       package: cpPkg,
       baseUrl: cpBase.trim(),
       apiKey: cpKey.trim(),
-      defaultModel: cpDefaultModel.trim() || cleanModels[0]?.id || undefined,
+      defaultModel: cleanModels[0]?.id || undefined,
       models: cleanModels,
       syncToOpencode: false,
     });
     setAddOpen(false);
     setCpName("");
-    setCpSlug("");
     setCpBase("");
-    setCpDefaultModel("");
     setCpModels([{ id: "", name: "", contextLimit: 32768, outputLimit: 4096 }]);
   };
 
@@ -504,24 +498,13 @@ export function AccountsPage() {
 
           {/* 1. Custom Provider / Model */}
           <TabsContent value="custom_provider" className="space-y-3 max-h-[60vh] overflow-y-auto pr-1">
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-              <div className="space-y-1">
-                <Label>Model / Sağlayıcı Adı</Label>
-                <Input
-                  value={cpName}
-                  onChange={(e) => setCpName(e.target.value)}
-                  placeholder="Örn: Colab Qwen3.5 9B"
-                />
-              </div>
-              <div className="space-y-1">
-                <Label>Kısa Kimlik (isteğe bağlı slug)</Label>
-                <Input
-                  className="font-mono text-xs"
-                  value={cpSlug}
-                  onChange={(e) => setCpSlug(e.target.value)}
-                  placeholder="Boş bırakırsanız addan üretilir"
-                />
-              </div>
+            <div className="space-y-1">
+              <Label>Sağlayıcı Adı</Label>
+              <Input
+                value={cpName}
+                onChange={(e) => setCpName(e.target.value)}
+                placeholder="Örn: Colab Qwen3.5"
+              />
             </div>
 
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
@@ -912,9 +895,7 @@ export function AccountsPage() {
               </div>
             )}
 
-            {(editTarget.kind === "zcode_oauth" ||
-              editTarget.kind === "z_api" ||
-              editTarget.kind === "custom_provider") && (
+            {(editTarget.kind === "zcode_oauth" || editTarget.kind === "z_api") && (
               <div className="space-y-1">
                 <Label>Varsayılan Model</Label>
                 <Input
@@ -927,24 +908,16 @@ export function AccountsPage() {
 
             {editTarget.kind === "custom_provider" && (
               <>
-                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                  <div className="space-y-1">
-                    <Label>Sağlayıcı ID (slug)</Label>
-                    <Input
-                      className="font-mono text-xs"
-                      value={edSlug}
-                      onChange={(e) => setEdSlug(e.target.value)}
-                    />
-                  </div>
-                  <div className="space-y-1">
-                    <Label>Paket (`package`)</Label>
-                    <Select value={edPkg} onChange={(e) => setEdPkg(e.target.value)}>
-                      <option value="@opencode/ai/providers/openai-compatible">
-                        openai-compatible
-                      </option>
-                      <option value="@opencode/ai/providers/anthropic">anthropic</option>
-                    </Select>
-                  </div>
+                <div className="space-y-1">
+                  <Label>API Uyumluluğu</Label>
+                  <Select value={edPkg} onChange={(e) => setEdPkg(e.target.value)}>
+                    <option value="@opencode/ai/providers/openai-compatible">
+                      OpenAI Uyumlu (openai-compatible)
+                    </option>
+                    <option value="@opencode/ai/providers/anthropic">
+                      Anthropic Uyumlu (anthropic)
+                    </option>
+                  </Select>
                 </div>
                 <div className="space-y-2">
                   <div className="flex items-center justify-between">
