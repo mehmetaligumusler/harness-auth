@@ -28,6 +28,7 @@ uuid = { version = "1", features = ["v4"] }
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 
 ureq = { version = "2", features = ["json"] }
+flate2 = "1"
 keyring = { version = "3", features = ["windows-native"] }
 winreg = "0.52"
 

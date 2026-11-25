@@ -1,6 +1,11 @@
-//! Tauri command surface — the only bridge between the React UI and the
-//! Rust backend. Secrets (credentials, master secret) never leave this layer;
-//! the frontend receives masked summaries only.
+//! Tauri command surface for HarnessAuth v2.
+//!
+//! Centralized encrypted vault (`vault.json`) + one-click switching across:
+//! - Claude Code (`claude`)
+//! - OpenCode (`opencode`, `opencode.jsonc`)
+//! - ZCode Desktop (`~/.zcode/v2/`)
+//! - Antigravity CLI (`agy`)
+//! - Background ZCode Service (Start Plan / Coding Plan + quota + logs)
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -12,17 +17,17 @@ use crate::harness::{
     self,
     antigravity::{self, AntigravityLiveState},
     claude_harness::{self, ClaudeLiveState, ClaudePaths},
+    openai_bridge::BridgeTarget,
     opencode::{self, OpenCodeLiveState, OpenCodePaths},
-    HarnessSessionSummary,
+    zcode_harness::{self, ZCodeLiveState, ZCodePaths},
 };
 use crate::http;
 use crate::oauth;
 use crate::panel::PanelClient;
-use crate::paths;
 use crate::proxy::{self, ProxyStatus};
 use crate::settings::Settings;
 use crate::state::AppState;
-use crate::vault::{self, AccountSummary, VaultData};
+use crate::unified_vault::{CustomModelDef, UnifiedAccount, UnifiedAccountSummary};
 use crate::yamlpatch::{self, YamlUpdate};
 
 fn now_ms() -> i64 {
@@ -40,7 +45,7 @@ pub struct ProxyStatusDto {
     pub status: ProxyStatus,
     pub active_account_id: Option<String>,
     pub active_account_name: Option<String>,
-    pub account_count: usize,
+    pub zcode_account_count: usize,
     pub oauth_running: bool,
 }
 
@@ -48,12 +53,11 @@ pub struct ProxyStatusDto {
 #[serde(rename_all = "camelCase")]
 pub struct AppStateDto {
     pub settings: Settings,
-    pub accounts: Vec<AccountSummary>,
-    pub sessions: Vec<HarnessSessionSummary>,
+    pub accounts: Vec<UnifiedAccountSummary>,
     pub proxy: ProxyStatusDto,
-    pub claude: claude::ClaudeInfo,
     pub claude_live: ClaudeLiveState,
     pub opencode_live: OpenCodeLiveState,
+    pub zcode_live: ZCodeLiveState,
     pub antigravity_live: AntigravityLiveState,
     pub harness_oauth_running: bool,
     pub harness_oauth_target: Option<String>,
@@ -74,6 +78,7 @@ pub struct PathsDto {
     pub config: String,
     pub errors_log: String,
     pub data_dir: String,
+    pub vault: String,
 }
 
 #[derive(Serialize)]
@@ -84,8 +89,15 @@ pub struct TestResult {
     pub latency_ms: Option<u64>,
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImportResultDto {
+    pub imported: usize,
+    pub details: Vec<String>,
+}
+
 // ---------------------------------------------------------------------------
-// Status helpers
+// Status & config helpers
 // ---------------------------------------------------------------------------
 
 fn build_status(app: &AppHandle) -> ProxyStatusDto {
@@ -93,20 +105,26 @@ fn build_status(app: &AppHandle) -> ProxyStatusDto {
     let settings = state.settings.lock().unwrap().clone();
     let managed = state.proxy.lock().unwrap().clone();
     let oauth_running = state.oauth.lock().unwrap().running;
-    let (active_account_id, active_account_name, account_count) = {
+    let (active_account_id, active_account_name, zcode_account_count) = {
         let vault = state.vault.lock().unwrap();
-        (
-            vault.active_id.clone(),
-            vault.active().map(|a| a.name.clone()),
-            vault.accounts.len(),
-        )
+        let active_id = settings.zcode_service_account_id.clone();
+        let active_name = active_id
+            .as_deref()
+            .and_then(|id| vault.find(id))
+            .map(|a| a.name.clone());
+        let count = vault
+            .accounts
+            .iter()
+            .filter(|a| a.kind == "zcode_oauth")
+            .count();
+        (active_id, active_name, count)
     };
     let status = proxy::status(&state.paths, &settings, &managed);
     ProxyStatusDto {
         status,
         active_account_id,
         active_account_name,
-        account_count,
+        zcode_account_count,
         oauth_running,
     }
 }
@@ -130,7 +148,6 @@ fn panel(app: &AppHandle) -> Result<PanelClient, String> {
     Ok(PanelClient::new(port, &settings.panel_token))
 }
 
-/// Validate a model id exactly like the Claude launcher does.
 fn check_model(model: &str) -> Result<(), String> {
     if claude::valid_model_name(model) {
         Ok(())
@@ -139,25 +156,31 @@ fn check_model(model: &str) -> Result<(), String> {
     }
 }
 
+fn save_vault_and_settings(state: &AppState) -> Result<(), String> {
+    {
+        let mut s = state.settings.lock().unwrap();
+        let vault = state.vault.lock().unwrap();
+        vault.reconcile_settings(&mut s);
+        vault.save(&state.paths.unified_vault_file())?;
+        s.save(&state.paths)?;
+    }
+    Ok(())
+}
+
 // ---------------------------------------------------------------------------
 // App state / settings
 // ---------------------------------------------------------------------------
 
 #[tauri::command]
 pub async fn get_app_state(app: AppHandle) -> Result<AppStateDto, String> {
-    let proxy_exe = paths::resolve_proxy_exe();
-    let (claude_info, claude_live, opencode_live, antigravity_live, proxy_version) =
+    let state = app.state::<AppState>();
+    let proxy_exe = state.paths.proxy_exe();
+    let (claude_live, opencode_live, zcode_live, antigravity_live, proxy_version) =
         tauri::async_runtime::spawn_blocking(move || {
-            let claude_live = claude_harness::inspect_live();
-            let claude_info = claude::ClaudeInfo {
-                found: claude_live.cli.found,
-                version: claude_live.cli.version.clone(),
-                path: claude_live.cli.path.clone(),
-            };
             (
-                claude_info,
-                claude_live,
+                claude_harness::inspect_live(),
                 opencode::inspect_live(),
+                zcode_harness::inspect_live(),
                 antigravity::inspect_live(),
                 claude::proxy_exe_version(&proxy_exe),
             )
@@ -165,14 +188,8 @@ pub async fn get_app_state(app: AppHandle) -> Result<AppStateDto, String> {
         .await
         .map_err(|e| e.to_string())?;
 
-    let state = app.state::<AppState>();
     let settings = state.settings.lock().unwrap().clone();
-    let accounts = state.vault.lock().unwrap().summaries();
-    let sessions = state.sessions.lock().unwrap().summaries(
-        settings.claude_active_session_id.as_deref(),
-        settings.opencode_active_session_id.as_deref(),
-        settings.antigravity_active_session_id.as_deref(),
-    );
+    let accounts = state.vault.lock().unwrap().summaries(&settings);
     let (harness_oauth_running, harness_oauth_target) = {
         let h = state.harness_oauth.lock().unwrap();
         (h.running, h.running.then(|| h.harness.clone()))
@@ -181,11 +198,10 @@ pub async fn get_app_state(app: AppHandle) -> Result<AppStateDto, String> {
     Ok(AppStateDto {
         settings,
         accounts,
-        sessions,
         proxy: build_status(&app),
-        claude: claude_info,
         claude_live,
         opencode_live,
+        zcode_live,
         antigravity_live,
         harness_oauth_running,
         harness_oauth_target,
@@ -197,13 +213,13 @@ pub async fn get_app_state(app: AppHandle) -> Result<AppStateDto, String> {
             config: state.paths.proxy_config().display().to_string(),
             errors_log: state.paths.proxy_errors_log().display().to_string(),
             data_dir: state.paths.data_dir.display().to_string(),
+            vault: state.paths.unified_vault_file().display().to_string(),
         },
     })
 }
 
 #[tauri::command]
 pub async fn save_settings(app: AppHandle, new_settings: Settings) -> Result<Settings, String> {
-    // Validate enums.
     if !matches!(new_settings.language.as_str(), "tr" | "en") {
         return Err("Desteklenmeyen dil".into());
     }
@@ -223,34 +239,45 @@ pub async fn save_settings(app: AppHandle, new_settings: Settings) -> Result<Set
     let state = app.state::<AppState>();
     let saved_snapshot = {
         let mut s = state.settings.lock().unwrap();
-        // Panel identity and live harness active pointers are backend-managed.
-        let (panel_port, panel_token) = (s.panel_port, s.panel_token.clone());
         let (
+            panel_port,
+            panel_token,
+            zcode_service_account_id,
             claude_active_method,
             claude_active_session_id,
             claude_active_model,
             opencode_active_session_id,
             opencode_active_method,
             opencode_active_model,
+            zcode_app_active_account_id,
+            zcode_app_active_method,
             antigravity_active_session_id,
         ) = (
+            s.panel_port,
+            s.panel_token.clone(),
+            s.zcode_service_account_id.clone(),
             s.claude_active_method.clone(),
             s.claude_active_session_id.clone(),
             s.claude_active_model.clone(),
             s.opencode_active_session_id.clone(),
             s.opencode_active_method.clone(),
             s.opencode_active_model.clone(),
+            s.zcode_app_active_account_id.clone(),
+            s.zcode_app_active_method.clone(),
             s.antigravity_active_session_id.clone(),
         );
         *s = new_settings;
         s.panel_port = panel_port;
         s.panel_token = panel_token;
+        s.zcode_service_account_id = zcode_service_account_id;
         s.claude_active_method = claude_active_method;
         s.claude_active_session_id = claude_active_session_id;
         s.claude_active_model = claude_active_model;
         s.opencode_active_session_id = opencode_active_session_id;
         s.opencode_active_method = opencode_active_method;
         s.opencode_active_model = opencode_active_model;
+        s.zcode_app_active_account_id = zcode_app_active_account_id;
+        s.zcode_app_active_method = zcode_app_active_method;
         s.antigravity_active_session_id = antigravity_active_session_id;
         s.sync_autostart()?;
         s.save(&state.paths)?;
@@ -270,20 +297,38 @@ pub fn reset_panel_identity(app: AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+#[tauri::command]
+pub fn get_versions(app: AppHandle) -> Versions {
+    let exe = app.state::<AppState>().paths.proxy_exe();
+    Versions {
+        app: app.package_info().version.to_string(),
+        proxy: claude::proxy_exe_version(&exe),
+    }
+}
+
+#[tauri::command]
+pub fn push_recent_folder(app: AppHandle, folder: String) -> Result<(), String> {
+    let state = app.state::<AppState>();
+    let mut s = state.settings.lock().unwrap();
+    s.recent_folders.retain(|f| f != &folder);
+    s.recent_folders.insert(0, folder);
+    s.recent_folders.truncate(10);
+    s.save(&state.paths)
+}
+
 // ---------------------------------------------------------------------------
-// Accounts
+// Centralized Unified Vault Accounts & Custom Models
 // ---------------------------------------------------------------------------
 
 #[tauri::command]
-pub fn add_api_key_account(
+pub fn add_z_api_account(
     app: AppHandle,
     name: String,
     provider: String,
     api_key: String,
-    default_plan: Option<String>,
     default_model: Option<String>,
     base_url: Option<String>,
-) -> Result<Vec<AccountSummary>, String> {
+) -> Result<Vec<UnifiedAccountSummary>, String> {
     if provider != "zai" && provider != "bigmodel" {
         return Err("Desteklenmeyen sağlayıcı".into());
     }
@@ -291,119 +336,367 @@ pub fn add_api_key_account(
     if key.len() < 8 {
         return Err("API Key çok kısa".into());
     }
-    // Keys are opaque token strings; restrict to a conservative charset.
-    if !key
-        .chars()
-        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_' | '='))
-    {
-        return Err("API Key geçersiz karakterler içeriyor".into());
-    }
     if let Some(m) = &default_model {
-        check_model(m)?;
-    }
-    if let Some(p) = &default_plan {
-        if p != "coding-plan" {
-            return Err("API Key bağlantıları yalnızca Coding Plan (Anthropic uyumlu) endpoint'ini kullanabilir".into());
+        if !m.trim().is_empty() {
+            check_model(m.trim())?;
         }
     }
-    let clean_base = base_url
-        .as_deref()
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .map(|s| {
-            if !s.starts_with("http://") && !s.starts_with("https://") {
-                return Err("Özel Base URL http:// veya https:// ile başlamalı".to_string());
-            }
-            Ok(s.trim_end_matches('/').to_string())
-        })
-        .transpose()?;
+    if let Some(u) = base_url.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        if !u.starts_with("http://") && !u.starts_with("https://") {
+            return Err("Base URL http:// veya https:// ile başlamalı".into());
+        }
+    }
 
     let state = app.state::<AppState>();
-    let mut vault = state.vault.lock().unwrap();
-    let cred = json!({ "apiKey": key, "provider": provider });
-    let display_name = if name.trim().is_empty() {
-        format!(
-            "{} API Key {}",
-            if provider == "zai" { "Z.AI" } else { "BigModel" },
-            vault.accounts.len() + 1
-        )
-    } else {
-        name.trim().to_string()
+    let vault_key = state.vault_key();
+    let display_name = {
+        let vault = state.vault.lock().unwrap();
+        if name.trim().is_empty() {
+            format!(
+                "{} API {}",
+                if provider == "zai" { "Z.AI" } else { "BigModel" },
+                vault.accounts.len() + 1
+            )
+        } else {
+            name.trim().to_string()
+        }
     };
-    let record = vault::record_from_credential(
+
+    let mut rec = UnifiedAccount::from_z_api_key(
         &display_name,
-        "api-key",
-        &cred,
-        &state.vault_key(),
+        &provider,
+        &key,
+        base_url.as_deref(),
+        &vault_key,
     )?;
-    let mut record = record;
-    record.default_plan = Some("coding-plan".into());
-    record.default_model = default_model;
-    record.base_url = clean_base;
-    let was_empty = vault.accounts.is_empty();
-    let id = record.id.clone();
-    vault.accounts.push(record);
-    if was_empty {
-        vault.active_id = Some(id);
+    rec.default_plan = Some("coding-plan".into());
+    rec.default_model = default_model
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+
+    let new_id = rec.id.clone();
+    {
+        let mut vault = state.vault.lock().unwrap();
+        vault.accounts.push(rec);
+        let mut s = state.settings.lock().unwrap();
+        if s.zcode_service_account_id.is_none() {
+            s.zcode_service_account_id = Some(new_id);
+        }
+        vault.save(&state.paths.unified_vault_file())?;
+        s.save(&state.paths)?;
     }
-    vault.save(&state.paths.vault_file())?;
-    let summaries = vault.summaries();
-    drop(vault);
+    let settings = state.settings.lock().unwrap().clone();
+    let summaries = state.vault.lock().unwrap().summaries(&settings);
     emit_proxy_state(&app);
     Ok(summaries)
 }
 
 #[tauri::command]
-pub fn update_account(
+pub fn add_custom_provider(
+    app: AppHandle,
+    name: String,
+    provider_slug: String,
+    package: String,
+    base_url: String,
+    api_key: String,
+    default_model: Option<String>,
+    models: Vec<CustomModelDef>,
+    sync_to_opencode: bool,
+) -> Result<Vec<UnifiedAccountSummary>, String> {
+    let clean_url = base_url.trim();
+    if !clean_url.starts_with("http://") && !clean_url.starts_with("https://") {
+        return Err("Base URL http:// veya https:// ile başlamalı".into());
+    }
+    if let Some(m) = default_model.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        check_model(m)?;
+    }
+    for m in &models {
+        if !m.id.trim().is_empty() {
+            check_model(m.id.trim())?;
+        }
+    }
+
+    let state = app.state::<AppState>();
+    let vault_key = state.vault_key();
+    let rec = UnifiedAccount::from_custom_provider(
+        &name,
+        &provider_slug,
+        &package,
+        clean_url,
+        &api_key,
+        default_model.as_deref(),
+        models,
+        &vault_key,
+    )?;
+
+    if sync_to_opencode {
+        if let Ok(oc_paths) = OpenCodePaths::live() {
+            let _ = opencode::upsert_provider_in(
+                &oc_paths,
+                &rec.provider,
+                rec.package
+                    .as_deref()
+                    .unwrap_or("@opencode/ai/providers/openai-compatible"),
+                &rec.name,
+                rec.base_url.as_deref().unwrap_or(clean_url),
+                api_key.trim(),
+                &rec.models,
+                rec.default_model.as_deref(),
+            );
+        }
+    }
+
+    {
+        let mut vault = state.vault.lock().unwrap();
+        vault.accounts.push(rec);
+        vault.save(&state.paths.unified_vault_file())?;
+    }
+    let settings = state.settings.lock().unwrap().clone();
+    let res = state.vault.lock().unwrap().summaries(&settings);
+    Ok(res)
+}
+
+#[allow(clippy::too_many_arguments)]
+#[tauri::command]
+pub async fn update_unified_account(
     app: AppHandle,
     id: String,
     name: Option<String>,
+    provider_slug: Option<String>,
+    package: Option<String>,
+    base_url: Option<String>,
+    api_key: Option<String>,
     default_plan: Option<String>,
     default_model: Option<String>,
-    base_url: Option<String>,
-) -> Result<Vec<AccountSummary>, String> {
-    if let Some(m) = &default_model {
-        if !m.is_empty() {
-            check_model(m)?;
-        }
+    models: Option<Vec<CustomModelDef>>,
+) -> Result<Vec<UnifiedAccountSummary>, String> {
+    if let Some(m) = default_model.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        check_model(m)?;
     }
-    let state = app.state::<AppState>();
-    let mut vault = state.vault.lock().unwrap();
-    let rec = vault
-        .accounts
-        .iter_mut()
-        .find(|a| a.id == id)
-        .ok_or_else(|| "Hesap bulunamadı".to_string())?;
-    if let Some(n) = name {
-        if !n.trim().is_empty() {
-            rec.name = n.trim().to_string();
-        }
-    }
-    if let Some(p) = default_plan {
-        if p == "start-plan" && !rec.has_jwt {
-            return Err("Bu hesapta Start Plan JWT bulunmuyor".into());
-        }
-        rec.default_plan = Some(p);
-    }
-    if let Some(m) = default_model {
-        rec.default_model = if m.is_empty() { None } else { Some(m) };
-    }
-    if let Some(u) = base_url {
-        let trimmed = u.trim();
-        if trimmed.is_empty() {
-            rec.base_url = None;
-        } else {
-            if !trimmed.starts_with("http://") && !trimmed.starts_with("https://") {
-                return Err("Özel Base URL http:// veya https:// ile başlamalı".into());
+    if let Some(ms) = &models {
+        for m in ms {
+            if !m.id.trim().is_empty() {
+                check_model(m.id.trim())?;
             }
-            rec.base_url = Some(trimmed.trim_end_matches('/').to_string());
         }
     }
-    vault.save(&state.paths.vault_file())?;
-    let summaries = vault.summaries();
-    drop(vault);
+
+    let state = app.state::<AppState>();
+    let vault_key = state.vault_key();
+
+    let updated_rec = {
+        let mut vault = state.vault.lock().unwrap();
+        let rec = vault
+            .find_mut(&id)
+            .ok_or_else(|| "Hesap bulunamadı".to_string())?;
+
+        if let Some(n) = name {
+            if !n.trim().is_empty() {
+                rec.name = n.trim().to_string();
+            }
+        }
+        if let Some(p) = default_plan {
+            if !p.is_empty() {
+                if rec.kind == "zcode_oauth" && (p == "coding-plan" || p == "start-plan") {
+                    rec.default_plan = Some(p);
+                } else if p == "coding-plan" {
+                    rec.default_plan = Some(p);
+                }
+            }
+        }
+        if let Some(m) = default_model {
+            let trimmed = m.trim();
+            rec.default_model = (!trimmed.is_empty()).then(|| trimmed.to_string());
+        }
+        if let Some(u) = base_url {
+            let trimmed = u.trim().trim_end_matches('/').to_string();
+            if !trimmed.is_empty() {
+                if !trimmed.starts_with("http://") && !trimmed.starts_with("https://") {
+                    return Err("Base URL http:// veya https:// ile başlamalı".into());
+                }
+                rec.base_url = Some(trimmed);
+            } else if rec.kind == "z_api" {
+                rec.base_url = None;
+            }
+        }
+        if rec.kind == "custom_provider" {
+            if let Some(slug) = provider_slug {
+                let s = crate::unified_vault::sanitize_provider_slug(&slug);
+                if !s.is_empty() {
+                    rec.provider = s;
+                }
+            }
+            if let Some(pkg) = package {
+                if !pkg.trim().is_empty() {
+                    rec.package = Some(pkg.trim().to_string());
+                }
+            }
+            if let Some(ms) = models {
+                rec.models = ms
+                    .into_iter()
+                    .filter(|m| !m.id.trim().is_empty())
+                    .map(|m| CustomModelDef {
+                        id: m.id.trim().to_string(),
+                        name: if m.name.trim().is_empty() {
+                            m.id.trim().to_string()
+                        } else {
+                            m.name.trim().to_string()
+                        },
+                        context_limit: m.context_limit,
+                        output_limit: m.output_limit,
+                    })
+                    .collect();
+            }
+            rec.user_hint = rec.default_model.clone();
+        }
+
+        let mut payload = rec.decrypt_payload(&vault_key)?;
+        if let Some(k) = api_key.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+            if let Some(obj) = payload.as_object_mut() {
+                obj.insert("apiKey".into(), json!(k));
+                if rec.kind == "z_api" {
+                    if let Some((kid, ksec)) = k.split_once('.') {
+                        if !kid.is_empty() && !ksec.is_empty() {
+                            obj.insert("secret".into(), json!(ksec));
+                        }
+                    } else {
+                        obj.remove("secret");
+                    }
+                }
+            }
+            rec.key_hint = harness::mask_secret(k);
+            rec.has_secret = true;
+        }
+        if let Some(u) = &rec.base_url {
+            if let Some(obj) = payload.as_object_mut() {
+                obj.insert("baseURL".into(), json!(u));
+                if rec.kind == "z_api" {
+                    obj.insert("baseUrl".into(), json!(u));
+                }
+            }
+        }
+        rec.reencrypt_payload(&payload, &vault_key)?;
+        let clone = rec.clone();
+        vault.save(&state.paths.unified_vault_file())?;
+        clone
+    };
+
+    // Auto re-sync whichever harness currently has this account active.
+    let (active_in_opencode, active_in_claude, active_in_zcode) = {
+        let s = state.settings.lock().unwrap();
+        (
+            s.opencode_active_session_id.as_deref() == Some(id.as_str()),
+            s.claude_active_session_id.as_deref() == Some(id.as_str()),
+            s.zcode_app_active_account_id.as_deref() == Some(id.as_str()),
+        )
+    };
+
+    if matches!(updated_rec.kind.as_str(), "custom_provider" | "z_api") {
+        if let Ok(oc_paths) = OpenCodePaths::live() {
+            let slug = opencode::provider_slug_for_account(&updated_rec);
+            let live_oc = opencode::inspect_live_at(&oc_paths);
+            let exists_in_oc = live_oc.providers.iter().any(|p| p.id == slug);
+            if active_in_opencode || exists_in_oc {
+                let chosen = updated_rec
+                    .default_model
+                    .as_deref()
+                    .or_else(|| updated_rec.models.first().map(|m| m.id.as_str()));
+                let _ = opencode::apply_unified_account_at(
+                    &oc_paths,
+                    &updated_rec,
+                    &vault_key,
+                    None,
+                    chosen,
+                    active_in_opencode,
+                );
+                if active_in_opencode {
+                    let mut s = state.settings.lock().unwrap();
+                    s.opencode_active_model = chosen.map(String::from);
+                    let _ = s.save(&state.paths);
+                }
+            }
+        }
+    }
+
+    if active_in_claude && matches!(updated_rec.kind.as_str(), "custom_provider" | "z_api") {
+        if let Ok(cl_paths) = ClaudePaths::live() {
+            let api_key = updated_rec.extract_api_key(&vault_key).unwrap_or_default();
+            let chosen_model = updated_rec
+                .default_model
+                .clone()
+                .or_else(|| updated_rec.models.first().map(|m| m.id.clone()));
+            if updated_rec.kind == "z_api" {
+                if let Ok(base) = claude_harness::resolve_z_api_base(
+                    &updated_rec.provider,
+                    updated_rec.base_url.as_deref(),
+                ) {
+                    let eff = chosen_model.as_deref().unwrap_or("glm-5.3");
+                    let _ = claude_harness::apply_env_bridge_at(
+                        &cl_paths,
+                        &base,
+                        &api_key,
+                        Some(eff),
+                    );
+                }
+            } else if let Some(base_url) = updated_rec
+                .base_url
+                .as_deref()
+                .filter(|s| !s.trim().is_empty())
+            {
+                let pkg = updated_rec.package.as_deref().unwrap_or("");
+                let allowed: Vec<String> =
+                    updated_rec.models.iter().map(|m| m.id.clone()).collect();
+                if pkg.contains("anthropic") {
+                    let _ = claude_harness::apply_env_bridge_at(
+                        &cl_paths,
+                        base_url.trim().trim_end_matches('/'),
+                        if api_key.is_empty() { "custom" } else { &api_key },
+                        chosen_model.as_deref(),
+                    );
+                } else if let Ok((bridge_url, bridge_key)) = state.openai_bridge.configure(
+                    BridgeTarget {
+                        base_url: base_url.to_string(),
+                        api_key,
+                        default_model: chosen_model.clone(),
+                        allowed_models: allowed,
+                        local_api_key: String::new(),
+                    },
+                ) {
+                    let _ = claude_harness::apply_env_bridge_at(
+                        &cl_paths,
+                        &bridge_url,
+                        &bridge_key,
+                        chosen_model.as_deref(),
+                    );
+                }
+            }
+            let mut s = state.settings.lock().unwrap();
+            s.claude_active_model = chosen_model;
+            let _ = s.save(&state.paths);
+        }
+    }
+
+    if active_in_zcode && updated_rec.kind == "z_api" {
+        if let Ok(zc_paths) = ZCodePaths::live() {
+            let _ = zcode_harness::activate_zcode_account_at(&zc_paths, &updated_rec, &vault_key);
+        }
+    }
+
+    let settings = state.settings.lock().unwrap().clone();
     emit_proxy_state(&app);
-    Ok(summaries)
+    let res = state.vault.lock().unwrap().summaries(&settings);
+    Ok(res)
+}
+
+#[tauri::command]
+pub fn get_account_secret(app: AppHandle, id: String) -> Result<String, String> {
+    let state = app.state::<AppState>();
+    let vault_key = state.vault_key();
+    let vault = state.vault.lock().unwrap();
+    let rec = vault
+        .find(&id)
+        .ok_or_else(|| "Hesap bulunamadı".to_string())?;
+    rec.extract_api_key(&vault_key)
 }
 
 #[tauri::command]
@@ -411,207 +704,325 @@ pub async fn set_account_enabled(
     app: AppHandle,
     id: String,
     enabled: bool,
-) -> Result<Vec<AccountSummary>, String> {
-    let was_active = {
-        let state = app.state::<AppState>();
+) -> Result<Vec<UnifiedAccountSummary>, String> {
+    let state = app.state::<AppState>();
+    let (was_service, was_claude, was_opencode, was_zcode, was_agy) = {
+        let s = state.settings.lock().unwrap();
         let mut vault = state.vault.lock().unwrap();
-        let is_active = vault.is_active(&id);
         let rec = vault
-            .accounts
-            .iter_mut()
-            .find(|a| a.id == id)
+            .find_mut(&id)
             .ok_or_else(|| "Hesap bulunamadı".to_string())?;
         rec.enabled = enabled;
-        if !enabled && is_active {
-            vault.active_id = None;
-        }
-        vault.save(&state.paths.vault_file())?;
-        is_active
+        vault.save(&state.paths.unified_vault_file())?;
+        (
+            s.zcode_service_account_id.as_deref() == Some(id.as_str()),
+            s.claude_active_session_id.as_deref() == Some(id.as_str()),
+            s.opencode_active_session_id.as_deref() == Some(id.as_str()),
+            s.zcode_app_active_account_id.as_deref() == Some(id.as_str()),
+            s.antigravity_active_session_id.as_deref() == Some(id.as_str()),
+        )
     };
 
-    if !enabled && was_active {
-        stop_proxy_process(&app).await?;
-        let state = app.state::<AppState>();
-        credstore::clear_credential(&state.paths.proxy_store_dir());
+    if !enabled {
+        if was_service {
+            let _ = stop_proxy_process(&app).await;
+            credstore::clear_credential(&state.paths.proxy_store_dir());
+            let mut s = state.settings.lock().unwrap();
+            s.zcode_service_account_id = None;
+            let _ = s.save(&state.paths);
+        }
+        if was_claude {
+            let _ = disable_harness(app.clone(), "claude".into()).await;
+        }
+        if was_opencode {
+            let _ = disable_harness(app.clone(), "opencode".into()).await;
+        }
+        if was_zcode {
+            let _ = disable_harness(app.clone(), "zcode".into()).await;
+        }
+        if was_agy {
+            let _ = disable_harness(app.clone(), "antigravity".into()).await;
+        }
     }
 
+    let settings = state.settings.lock().unwrap().clone();
     emit_proxy_state(&app);
-    let state = app.state::<AppState>();
-    let summaries = state.vault.lock().unwrap().summaries();
-    Ok(summaries)
+    let res = state.vault.lock().unwrap().summaries(&settings);
+    Ok(res)
 }
 
 #[tauri::command]
-pub async fn deactivate_account(app: AppHandle) -> Result<ProxyStatusDto, String> {
-    stop_proxy_process(&app).await?;
+pub async fn delete_account(app: AppHandle, id: String) -> Result<Vec<UnifiedAccountSummary>, String> {
     let state = app.state::<AppState>();
-    credstore::clear_credential(&state.paths.proxy_store_dir());
-    {
-        let mut vault = state.vault.lock().unwrap();
-        vault.active_id = None;
-        vault.save(&state.paths.vault_file())?;
-    }
-    emit_proxy_state(&app);
-    Ok(build_status(&app))
-}
-
-#[tauri::command]
-pub async fn delete_account(app: AppHandle, id: String) -> Result<Value, String> {
-    let was_active = {
-        let state = app.state::<AppState>();
-        let vault = state.vault.lock().unwrap();
-        if !vault.accounts.iter().any(|a| a.id == id) {
-            return Err("Hesap bulunamadı".into());
-        }
-        vault.is_active(&id)
+    let was_service = {
+        let s = state.settings.lock().unwrap();
+        s.zcode_service_account_id.as_deref() == Some(id.as_str())
     };
-
-    if was_active {
-        stop_proxy_process(&app).await?;
-        let state = app.state::<AppState>();
+    if was_service {
+        let _ = stop_proxy_process(&app).await;
         credstore::clear_credential(&state.paths.proxy_store_dir());
     }
 
-    let state = app.state::<AppState>();
     {
         let mut vault = state.vault.lock().unwrap();
         vault.accounts.retain(|a| a.id != id);
-        if vault.active_id.as_deref() == Some(id.as_str()) {
-            vault.active_id = None;
-        }
-        vault.save(&state.paths.vault_file())?;
     }
+    save_vault_and_settings(&state)?;
+
+    let settings = state.settings.lock().unwrap().clone();
     emit_proxy_state(&app);
-    Ok(json!({ "ok": true }))
+    let res = state.vault.lock().unwrap().summaries(&settings);
+    Ok(res)
 }
 
-/// Write the active account's credential + config keys and (re)start the
-/// proxy process so it runs under the new account.
-#[tauri::command]
-pub async fn activate_account(app: AppHandle, id: String) -> Result<ProxyStatusDto, String> {
-    let state = app.state::<AppState>();
-    // Decrypting here validates the credential before we commit the switch.
-    let (_cred_json, provider, plan, model) = {
-        let vault_key = state.vault_key();
-        let mut vault = state.vault.lock().unwrap();
-        let rec = vault
-            .accounts
-            .iter()
-            .find(|a| a.id == id)
-            .ok_or_else(|| "Hesap bulunamadı".to_string())?
-            .clone();
-        if !rec.enabled {
-            return Err("Bu hesap devre dışı. Önce hesabı etkinleştirin.".into());
-        }
-        let cred = rec.decrypt_credential(&vault_key)?;
-        let json = serde_json::to_string(&cred).map_err(|e| e.to_string())?;
-        let settings = state.settings.lock().unwrap().clone();
-        let plan = rec
-            .default_plan
-            .clone()
-            .filter(|p| p == "start-plan" && rec.has_jwt)
-            .unwrap_or_else(|| {
-                if settings.default_plan == "start-plan" && rec.has_jwt {
-                    "start-plan".into()
-                } else {
-                    "coding-plan".into()
-                }
-            });
-        vault.active_id = Some(id.clone());
-        if let Some(r) = vault.accounts.iter_mut().find(|a| a.id == id) {
-            r.last_used_at = Some(now_ms());
-        }
-        vault.save(&state.paths.vault_file())?;
-        (json, rec.provider, plan, rec.default_model)
-    };
-
-    // Config keys follow the account.
-    let mut updates = vec![
-        yamlpatch::update("provider", provider),
-        yamlpatch::update("plan", plan),
-    ];
-    if let Some(m) = &model {
-        updates.push(yamlpatch::update("defaultModel", m.clone()));
-    }
-    proxy::patch_proxy_config(&state.paths, &updates)?;
-
-    // Restart the process if it is up, so AuthManager picks the new credential.
-    let alive = {
-        let settings = state.settings.lock().unwrap().clone();
-        let managed = state.proxy.lock().unwrap().clone();
-        proxy::status(&state.paths, &settings, &managed).process_alive
-    };
-    if alive {
-        stop_proxy_process(&app).await?;
-    }
-    start_proxy_process(&app).await?;
-    Ok(build_status(&app))
-}
-
-/// Zero-cost connection test against the provider's models endpoint
-/// (validates the key without generating tokens).
 #[tauri::command]
 pub async fn test_account(app: AppHandle, id: String) -> Result<TestResult, String> {
     let state = app.state::<AppState>();
-    let (provider, joined_key) = {
-        let vault_key = state.vault_key();
+    let vault_key = state.vault_key();
+    let rec = {
         let vault = state.vault.lock().unwrap();
-        let rec = vault
-            .accounts
-            .iter()
-            .find(|a| a.id == id)
-            .ok_or_else(|| "Hesap bulunamadı".to_string())?;
-        let cred = rec.decrypt_credential(&vault_key)?;
-        let api_key = cred
-            .get("apiKey")
-            .and_then(|v| v.as_str())
-            .ok_or("kimlikte apiKey yok")?;
-        let joined = match cred.get("secret").and_then(|v| v.as_str()) {
-            Some(s) if !s.is_empty() => format!("{api_key}.{s}"),
-            _ => api_key.to_string(),
-        };
-        (rec.provider.clone(), joined)
+        vault
+            .find(&id)
+            .cloned()
+            .ok_or_else(|| "Hesap bulunamadı".to_string())?
     };
 
-    let url = if provider == "zai" {
-        "https://api.z.ai/api/paas/v4/models"
-    } else {
-        "https://open.bigmodel.cn/api/paas/v4/models"
-    };
-
-    let started = std::time::Instant::now();
-    let res = tauri::async_runtime::spawn_blocking(move || {
-        http::get(
-            url,
-            &[("Authorization", format!("Bearer {joined_key}").as_str())],
-            25,
-        )
-    })
-    .await
-    .map_err(|e| e.to_string())?;
-    let latency = started.elapsed().as_millis() as u64;
-
-    match res {
-        Ok(r) if r.status == 200 => Ok(TestResult {
+    match rec.kind.as_str() {
+        "zcode_oauth" | "z_api" => {
+            let cred = rec.extract_zcode_credential(&vault_key)?;
+            let api_key = cred.get("apiKey").and_then(|v| v.as_str()).unwrap_or("");
+            let joined = match cred.get("secret").and_then(|v| v.as_str()) {
+                Some(s) if !s.is_empty() => format!("{api_key}.{s}"),
+                _ => api_key.to_string(),
+            };
+            if joined.is_empty() {
+                return Ok(TestResult {
+                    ok: false,
+                    message: "Hesapta test edilecek API anahtarı bulunamadı".into(),
+                    latency_ms: None,
+                });
+            }
+            let url = if rec.provider == "bigmodel" {
+                "https://open.bigmodel.cn/api/paas/v4/models".to_string()
+            } else {
+                "https://api.z.ai/api/paas/v4/models".to_string()
+            };
+            let started = std::time::Instant::now();
+            let res = tauri::async_runtime::spawn_blocking(move || {
+                http::get(&url, &[("Authorization", format!("Bearer {joined}").as_str())], 20)
+            })
+            .await
+            .map_err(|e| e.to_string())?;
+            let latency = started.elapsed().as_millis() as u64;
+            match res {
+                Ok(r) if r.status == 200 => Ok(TestResult {
+                    ok: true,
+                    message: format!("Bağlantı başarılı ({latency} ms)"),
+                    latency_ms: Some(latency),
+                }),
+                Ok(r) => Ok(TestResult {
+                    ok: false,
+                    message: http::friendly_http_error(r.status, &r.body),
+                    latency_ms: Some(latency),
+                }),
+                Err(e) => Ok(TestResult {
+                    ok: false,
+                    message: format!("Ağ hatası: {e}"),
+                    latency_ms: None,
+                }),
+            }
+        }
+        "custom_provider" => {
+            let key = rec.extract_api_key(&vault_key).unwrap_or_default();
+            let base = rec
+                .base_url
+                .as_deref()
+                .ok_or("Base URL tanımlı değil")?
+                .trim_end_matches('/');
+            let url = if rec.package.as_deref().unwrap_or("").contains("anthropic") {
+                if base.ends_with("/v1") {
+                    format!("{base}/models")
+                } else {
+                    format!("{base}/v1/models")
+                }
+            } else if base.ends_with("/v1") {
+                format!("{base}/models")
+            } else {
+                format!("{base}/v1/models")
+            };
+            let started = std::time::Instant::now();
+            let res = tauri::async_runtime::spawn_blocking(move || {
+                let auth = format!("Bearer {key}");
+                let headers: Vec<(&str, &str)> = if key.is_empty() {
+                    Vec::new()
+                } else {
+                    vec![("Authorization", auth.as_str()), ("x-api-key", key.as_str())]
+                };
+                http::get(&url, &headers, 15)
+            })
+            .await
+            .map_err(|e| e.to_string())?;
+            let latency = started.elapsed().as_millis() as u64;
+            match res {
+                Ok(r) if (200..300).contains(&r.status) => Ok(TestResult {
+                    ok: true,
+                    message: format!("Özel uç nokta yanıt verdi ({latency} ms)"),
+                    latency_ms: Some(latency),
+                }),
+                Ok(r) => Ok(TestResult {
+                    ok: false,
+                    message: format!("HTTP {} yanıtı döndü ({latency} ms)", r.status),
+                    latency_ms: Some(latency),
+                }),
+                Err(e) => Ok(TestResult {
+                    ok: false,
+                    message: format!("Uç noktaya ulaşılamadı: {e}"),
+                    latency_ms: None,
+                }),
+            }
+        }
+        _ => Ok(TestResult {
             ok: true,
-            message: format!("Bağlantı başarılı — API Key geçerli ({latency} ms)"),
-            latency_ms: Some(latency),
-        }),
-        Ok(r) => Ok(TestResult {
-            ok: false,
-            message: http::friendly_http_error(r.status, &r.body),
-            latency_ms: Some(latency),
-        }),
-        Err(e) => Ok(TestResult {
-            ok: false,
-            message: format!("Ağ hatası: {e}"),
+            message: "OAuth oturumu kasada şifreli olarak hazır".into(),
             latency_ms: None,
         }),
     }
 }
 
+#[tauri::command]
+pub fn import_system_accounts(app: AppHandle) -> Result<ImportResultDto, String> {
+    let state = app.state::<AppState>();
+    let vault_key = state.vault_key();
+    let mut details = Vec::new();
+    let mut total = 0usize;
+
+    {
+        let mut vault = state.vault.lock().unwrap();
+
+        // 1. OpenCode providers (opencode.jsonc)
+        if let Ok(oc_paths) = OpenCodePaths::live() {
+            if let Ok(n) = opencode::import_providers_into_vault(&oc_paths, &mut vault, &vault_key) {
+                if n > 0 {
+                    total += n;
+                    details.push(format!("OpenCode: {n} özel model/sağlayıcı içe aktarıldı"));
+                }
+            }
+        }
+
+        // 2. ZCode Desktop personal API key rules (~/.zcode/v2/provider_config.json)
+        if let Ok(zc_paths) = ZCodePaths::live() {
+            if let Ok(n) =
+                zcode_harness::import_personal_rules_into_vault(&zc_paths, &mut vault, &vault_key)
+            {
+                if n > 0 {
+                    total += n;
+                    details.push(format!("ZCode: {n} API anahtarı içe aktarıldı"));
+                }
+            }
+        }
+
+        // 3. Claude Code active OAuth (~/.claude/.credentials.json)
+        if let Ok(cl_paths) = ClaudePaths::live() {
+            if let Ok(rec) =
+                claude_harness::capture_unified_claude_oauth_at(&cl_paths, &vault_key, None)
+            {
+                if let Ok(payload) = rec.decrypt_payload(&vault_key) {
+                    let dup = vault
+                        .accounts
+                        .iter()
+                        .filter(|a| a.kind == "claude_oauth")
+                        .any(|a| a.decrypt_payload(&vault_key).ok().as_ref() == Some(&payload));
+                    if !dup {
+                        vault.accounts.push(rec);
+                        total += 1;
+                        details.push("Claude Code: aktif OAuth oturumu içe aktarıldı".into());
+                    }
+                }
+            }
+        }
+
+        // 4. Antigravity CLI (`agy`) active OAuth
+        if let Ok(rec) = antigravity::capture_unified_current(&vault_key, None) {
+            if let Ok(payload) = rec.decrypt_payload(&vault_key) {
+                let dup = vault
+                    .accounts
+                    .iter()
+                    .filter(|a| a.kind == "antigravity_oauth")
+                    .any(|a| {
+                        a.decrypt_payload(&vault_key)
+                            .ok()
+                            .map(|p| {
+                                p.get("refresh_token") == payload.get("refresh_token")
+                                    || p == payload
+                            })
+                            .unwrap_or(false)
+                    });
+                if !dup {
+                    vault.accounts.push(rec);
+                    total += 1;
+                    details.push("Antigravity CLI: aktif Google oturumu içe aktarıldı".into());
+                }
+            }
+        }
+
+        // 5. ZCode Desktop OAuth (`~/.zcode/v2/credentials.json`)
+        let has_zcode_oauth = vault.accounts.iter().any(|a| a.kind == "zcode_oauth");
+        if !has_zcode_oauth {
+            if let Ok(zc_paths) = ZCodePaths::live() {
+                if zc_paths.v2_dir.join("credentials.json").is_file() {
+                    let tmp_store = state
+                        .paths
+                        .tmp_dir()
+                        .join(format!("zcode-import-{}", uuid::Uuid::new_v4().simple()));
+                    if std::fs::create_dir_all(&tmp_store).is_ok() {
+                        let exe = state.paths.proxy_exe();
+                        let _ = proxy::ensure_proxy_config(&state.paths);
+                        let mut cmd = std::process::Command::new(&exe);
+                        cmd.args(["--cli", "auth", "login", "zai", "--import"])
+                            .env("ZCODE_PROXY_CONFIG", state.paths.proxy_config())
+                            .env("ZCODE_PROXY_STORE_DIR", &tmp_store)
+                            .env("ZCODE_MASTER_SECRET", &state.secret)
+                            .stdout(std::process::Stdio::null())
+                            .stderr(std::process::Stdio::null());
+                        #[cfg(windows)]
+                        {
+                            use std::os::windows::process::CommandExt;
+                            cmd.creation_flags(0x0800_0000);
+                        }
+                        if cmd.status().map(|s| s.success()).unwrap_or(false) {
+                            if let Ok(Some(cred)) =
+                                credstore::read_credential(&tmp_store, &state.secret)
+                            {
+                                if let Ok(rec) = UnifiedAccount::from_zcode_credential(
+                                    "ZCode OAuth (Sistem)",
+                                    "zcode_oauth",
+                                    &cred,
+                                    None,
+                                    &vault_key,
+                                ) {
+                                    vault.accounts.push(rec);
+                                    total += 1;
+                                    details.push("ZCode: aktif OAuth hesabı içe aktarıldı".into());
+                                }
+                            }
+                        }
+                        let _ = std::fs::remove_dir_all(&tmp_store);
+                    }
+                }
+            }
+        }
+    }
+
+    save_vault_and_settings(&state)?;
+    emit_proxy_state(&app);
+    Ok(ImportResultDto {
+        imported: total,
+        details,
+    })
+}
+
 // ---------------------------------------------------------------------------
-// OAuth
+// OAuth Capture / Login Flows
 // ---------------------------------------------------------------------------
 
 #[tauri::command]
@@ -624,9 +1035,609 @@ pub fn cancel_oauth(app: AppHandle) {
     oauth::cancel(&app);
 }
 
+#[tauri::command]
+pub fn start_claude_oauth(app: AppHandle, name: Option<String>) -> Result<(), String> {
+    claude_harness::start_oauth_login(&app, name)
+}
+
+#[tauri::command]
+pub fn capture_claude_oauth(app: AppHandle, name: Option<String>) -> Result<UnifiedAccountSummary, String> {
+    let state = app.state::<AppState>();
+    let vault_key = state.vault_key();
+    let paths = ClaudePaths::live()?;
+    let rec = claude_harness::capture_unified_claude_oauth_at(
+        &paths,
+        &vault_key,
+        name.as_deref().filter(|s| !s.trim().is_empty()),
+    )?;
+    let id = rec.id.clone();
+    {
+        let mut vault = state.vault.lock().unwrap();
+        vault.accounts.push(rec);
+        vault.save(&state.paths.unified_vault_file())?;
+    }
+    let settings = state.settings.lock().unwrap().clone();
+    let res = state
+        .vault
+        .lock()
+        .unwrap()
+        .find(&id)
+        .map(|a| a.summary(&settings))
+        .ok_or_else(|| "Kayıt bulunamadı".into());
+    res
+}
+
+#[tauri::command]
+pub fn start_agy_oauth(app: AppHandle, name: Option<String>) -> Result<(), String> {
+    antigravity::start_oauth_login(&app, name)
+}
+
+#[tauri::command]
+pub fn capture_agy_oauth(app: AppHandle, name: Option<String>) -> Result<UnifiedAccountSummary, String> {
+    let state = app.state::<AppState>();
+    let vault_key = state.vault_key();
+    let rec = antigravity::capture_unified_current(
+        &vault_key,
+        name.as_deref().filter(|s| !s.trim().is_empty()),
+    )?;
+    let id = rec.id.clone();
+    {
+        let mut vault = state.vault.lock().unwrap();
+        vault.accounts.push(rec);
+        vault.save(&state.paths.unified_vault_file())?;
+    }
+    let settings = state.settings.lock().unwrap().clone();
+    let res = state
+        .vault
+        .lock()
+        .unwrap()
+        .find(&id)
+        .map(|a| a.summary(&settings))
+        .ok_or_else(|| "Kayıt bulunamadı".into());
+    res
+}
+
+#[tauri::command]
+pub fn cancel_harness_oauth(app: AppHandle) {
+    let (pid, temp_dir) = {
+        let state = app.state::<AppState>();
+        let mut flow = state.harness_oauth.lock().unwrap();
+        flow.running = false;
+        (flow.child_pid.take(), flow.temp_dir.take())
+    };
+    if let Some(pid) = pid {
+        proxy::kill_pid(pid);
+    }
+    if let Some(dir) = temp_dir {
+        let _ = std::fs::remove_dir_all(dir);
+    }
+}
+
 // ---------------------------------------------------------------------------
-// Proxy lifecycle
+// One-Click Harness Activation, Disable, OpenCode Config, & Launch
 // ---------------------------------------------------------------------------
+
+async fn ensure_zcode_service_ready(
+    app: &AppHandle,
+    account_id: &str,
+) -> Result<(String, String), String> {
+    let state = app.state::<AppState>();
+    let need_switch_or_start = {
+        let s = state.settings.lock().unwrap().clone();
+        let vault = state.vault.lock().unwrap();
+        let rec = vault
+            .find(account_id)
+            .ok_or_else(|| "ZCode hesabı bulunamadı".to_string())?;
+        if !rec.enabled {
+            return Err("Seçilen hesap devre dışı".into());
+        }
+        if rec.kind != "zcode_oauth" {
+            return Err("ZCode Proxy yalnızca ZCode OAuth abonelik hesapları içindir".into());
+        }
+        let st = build_status(app);
+        s.zcode_service_account_id.as_deref() != Some(account_id)
+            || !st.status.process_alive
+            || !st.status.server_running
+    };
+
+    if need_switch_or_start {
+        activate_account(app.clone(), account_id.to_string()).await?;
+    }
+
+    let cfg = proxy::read_proxy_config(&state.paths)?;
+    let port = cfg
+        .pointer("/server/port")
+        .and_then(|v| v.as_u64())
+        .unwrap_or_default() as u16;
+    if port == 0 {
+        return Err("ZCode servis portu yapılandırılmamış".into());
+    }
+    let key = cfg
+        .pointer("/auth/proxyApiKey")
+        .and_then(|v| v.as_str())
+        .unwrap_or_default()
+        .to_string();
+    Ok((format!("http://127.0.0.1:{port}"), key))
+}
+
+#[tauri::command]
+pub async fn activate_for_harness(
+    app: AppHandle,
+    harness: String,
+    account_id: String,
+    model: Option<String>,
+) -> Result<(), String> {
+    let state = app.state::<AppState>();
+    let vault_key = state.vault_key();
+    let rec = {
+        let vault = state.vault.lock().unwrap();
+        vault
+            .find(&account_id)
+            .cloned()
+            .ok_or_else(|| "Hesap bulunamadı".to_string())?
+    };
+    if !rec.enabled {
+        return Err("Seçilen hesap devre dışı — önce Hesaplar sekmesinden etkinleştirin.".into());
+    }
+
+    let clean_model = model
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(String::from);
+    if let Some(m) = &clean_model {
+        check_model(m)?;
+    }
+
+    match harness.as_str() {
+        "claude" => {
+            if !rec.supports("claude") {
+                return Err(format!("{} hesabı Claude Code ile kullanılamaz", rec.name));
+            }
+            let cl_paths = ClaudePaths::live()?;
+
+            // Auto-backup live Claude OAuth credentials into the vault before switching away,
+            // so switching back to Claude OAuth later never loses the active session.
+            if rec.kind != "claude_oauth" && cl_paths.credentials_json.is_file() {
+                if let Ok(backup) = claude_harness::capture_unified_claude_oauth_at(
+                    &cl_paths,
+                    &vault_key,
+                    None,
+                ) {
+                    if let Ok(b_payload) = backup.decrypt_payload(&vault_key) {
+                        let mut vault = state.vault.lock().unwrap();
+                        let dup = vault
+                            .accounts
+                            .iter()
+                            .filter(|a| a.kind == "claude_oauth")
+                            .any(|a| {
+                                a.decrypt_payload(&vault_key)
+                                    .ok()
+                                    .as_ref()
+                                    .and_then(|p| p.get("credentials"))
+                                    == b_payload.get("credentials")
+                            });
+                        if !dup {
+                            vault.accounts.push(backup);
+                            let _ = vault.save(&state.paths.unified_vault_file());
+                        }
+                    }
+                }
+            }
+
+            let payload = rec.decrypt_payload(&vault_key)?;
+            let chosen_model = clean_model.clone().or_else(|| rec.default_model.clone());
+
+            match rec.kind.as_str() {
+                "claude_oauth" => {
+                    claude_harness::apply_claude_oauth_at(&cl_paths, &payload)?;
+                }
+                "zcode_oauth" => {
+                    let (endpoint, key) = ensure_zcode_service_ready(&app, &rec.id).await?;
+                    let eff_model = chosen_model.as_deref().unwrap_or("glm-5.3");
+                    claude_harness::apply_env_bridge_at(&cl_paths, &endpoint, &key, Some(eff_model))?;
+                }
+                "z_api" => {
+                    let api_key = rec.extract_api_key(&vault_key)?;
+                    let base = claude_harness::resolve_z_api_base(
+                        &rec.provider,
+                        rec.base_url.as_deref(),
+                    )?;
+                    let eff_model = chosen_model.as_deref().unwrap_or("glm-5.3");
+                    claude_harness::apply_env_bridge_at(&cl_paths, &base, &api_key, Some(eff_model))?;
+                }
+                "custom_provider" => {
+                    let api_key = rec.extract_api_key(&vault_key)?;
+                    let base_url = rec
+                        .base_url
+                        .as_deref()
+                        .filter(|s| !s.trim().is_empty())
+                        .ok_or("Özel sağlayıcıda Base URL eksik")?;
+                    let pkg = rec.package.as_deref().unwrap_or("");
+                    let allowed_models: Vec<String> =
+                        rec.models.iter().map(|m| m.id.clone()).collect();
+                    let eff_model = chosen_model
+                        .clone()
+                        .or_else(|| allowed_models.first().cloned());
+
+                    if pkg.contains("anthropic") {
+                        let base = base_url.trim().trim_end_matches('/');
+                        claude_harness::apply_env_bridge_at(
+                            &cl_paths,
+                            base,
+                            if api_key.is_empty() { "custom" } else { &api_key },
+                            eff_model.as_deref(),
+                        )?;
+                    } else {
+                        let (bridge_url, bridge_key) = state.openai_bridge.configure(BridgeTarget {
+                            base_url: base_url.to_string(),
+                            api_key,
+                            default_model: eff_model.clone(),
+                            allowed_models,
+                            local_api_key: String::new(),
+                        })?;
+                        claude_harness::apply_env_bridge_at(
+                            &cl_paths,
+                            &bridge_url,
+                            &bridge_key,
+                            eff_model.as_deref(),
+                        )?;
+                    }
+                }
+                _ => return Err("Desteklenmeyen hesap türü".into()),
+            }
+
+            let mut s = state.settings.lock().unwrap();
+            s.claude_active_method = rec.kind.clone();
+            s.claude_active_session_id = Some(rec.id.clone());
+            s.claude_active_model = chosen_model;
+            s.save(&state.paths)?;
+        }
+        "opencode" => {
+            if !rec.supports("opencode") {
+                return Err(format!("{} hesabı OpenCode ile kullanılamaz", rec.name));
+            }
+            let oc_paths = OpenCodePaths::live()?;
+            let zcode_info = if rec.kind == "zcode_oauth" {
+                Some(ensure_zcode_service_ready(&app, &rec.id).await?)
+            } else {
+                None
+            };
+            opencode::apply_unified_account_at(
+                &oc_paths,
+                &rec,
+                &vault_key,
+                zcode_info.as_ref().map(|(e, k)| (e.as_str(), k.as_str())),
+                clean_model.as_deref(),
+                true,
+            )?;
+
+            let chosen = clean_model
+                .or_else(|| rec.default_model.clone())
+                .or_else(|| rec.models.first().map(|m| m.id.clone()));
+            let mut s = state.settings.lock().unwrap();
+            s.opencode_active_method = rec.kind.clone();
+            s.opencode_active_session_id = Some(rec.id.clone());
+            s.opencode_active_model = chosen;
+            s.save(&state.paths)?;
+        }
+        "zcode" => {
+            if !rec.supports("zcode") {
+                return Err(format!("{} hesabı ZCode Desktop ile kullanılamaz", rec.name));
+            }
+            let zc_paths = ZCodePaths::live()?;
+            zcode_harness::activate_zcode_account_at(&zc_paths, &rec, &vault_key)?;
+            let mut s = state.settings.lock().unwrap();
+            s.zcode_app_active_method = rec.kind.clone();
+            s.zcode_app_active_account_id = Some(rec.id.clone());
+            s.save(&state.paths)?;
+        }
+        "antigravity" => {
+            if !rec.supports("antigravity") {
+                return Err(format!("{} hesabı Antigravity CLI ile kullanılamaz", rec.name));
+            }
+            antigravity::activate_unified(&rec, &vault_key)?;
+            let mut s = state.settings.lock().unwrap();
+            s.antigravity_active_session_id = Some(rec.id.clone());
+            s.save(&state.paths)?;
+        }
+        other => return Err(format!("Bilinmeyen araç: {other}")),
+    }
+
+    {
+        let mut vault = state.vault.lock().unwrap();
+        if let Some(r) = vault.find_mut(&account_id) {
+            r.last_used_at = Some(now_ms());
+        }
+        let _ = vault.save(&state.paths.unified_vault_file());
+    }
+    emit_proxy_state(&app);
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn disable_harness(app: AppHandle, harness: String) -> Result<(), String> {
+    let state = app.state::<AppState>();
+    let vault_key = state.vault_key();
+
+    match harness.as_str() {
+        "claude" => {
+            let cl_paths = ClaudePaths::live()?;
+            let clear_oauth = {
+                let s = state.settings.lock().unwrap();
+                s.claude_active_method == "claude_oauth" || s.claude_active_method == "disabled"
+            };
+            let backup = {
+                let vault = state.vault.lock().unwrap();
+                claude_harness::disable_unified_at(&cl_paths, clear_oauth, &vault, &vault_key)?
+            };
+            if let Some(rec) = backup {
+                let mut vault = state.vault.lock().unwrap();
+                vault.accounts.push(rec);
+                vault.save(&state.paths.unified_vault_file())?;
+            }
+            let mut s = state.settings.lock().unwrap();
+            s.claude_active_method = "disabled".into();
+            s.claude_active_session_id = None;
+            s.claude_active_model = None;
+            s.save(&state.paths)?;
+        }
+        "opencode" => {
+            let oc_paths = OpenCodePaths::live()?;
+            opencode::disable_at(&oc_paths)?;
+            let mut s = state.settings.lock().unwrap();
+            s.opencode_active_method = "disabled".into();
+            s.opencode_active_session_id = None;
+            s.opencode_active_model = None;
+            s.save(&state.paths)?;
+        }
+        "zcode" => {
+            let zc_paths = ZCodePaths::live()?;
+            zcode_harness::disable_at(&zc_paths)?;
+            let mut s = state.settings.lock().unwrap();
+            s.zcode_app_active_method = "disabled".into();
+            s.zcode_app_active_account_id = None;
+            s.save(&state.paths)?;
+        }
+        "antigravity" => {
+            let backup = {
+                let vault = state.vault.lock().unwrap();
+                antigravity::disable_unified(&vault, &vault_key)?
+            };
+            if let Some(rec) = backup {
+                let mut vault = state.vault.lock().unwrap();
+                vault.accounts.push(rec);
+                vault.save(&state.paths.unified_vault_file())?;
+            }
+            let mut s = state.settings.lock().unwrap();
+            s.antigravity_active_session_id = None;
+            s.save(&state.paths)?;
+        }
+        other => return Err(format!("Bilinmeyen araç: {other}")),
+    }
+
+    emit_proxy_state(&app);
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn launch_harness(
+    app: AppHandle,
+    harness: String,
+    folder: Option<String>,
+) -> Result<(), String> {
+    let state = app.state::<AppState>();
+    let launches = state.paths.launches_dir();
+
+    if harness == "zcode" {
+        return tauri::async_runtime::spawn_blocking(zcode_harness::launch_zcode_app)
+            .await
+            .map_err(|e| e.to_string())?;
+    }
+
+    let dir = resolve_folder(&app, folder)?;
+    tauri::async_runtime::spawn_blocking(move || match harness.as_str() {
+        "claude" => claude_harness::launch_claude_folder(&launches, &dir),
+        "opencode" => opencode::launch_opencode_folder(&launches, &dir),
+        "antigravity" => antigravity::launch_agy_folder(&launches, &dir),
+        other => Err(format!("Bilinmeyen araç: {other}")),
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+fn resolve_folder(app: &AppHandle, folder: Option<String>) -> Result<std::path::PathBuf, String> {
+    let state = app.state::<AppState>();
+    let settings = state.settings.lock().unwrap().clone();
+    let chosen = folder
+        .filter(|f| !f.trim().is_empty())
+        .or_else(|| settings.claude_default_folder.clone())
+        .or_else(|| settings.recent_folders.first().cloned())
+        .or_else(|| std::env::var("USERPROFILE").ok())
+        .ok_or_else(|| "Başlatılacak klasör seçilmedi".to_string())?;
+    let p = std::path::PathBuf::from(&chosen);
+    if !p.is_dir() {
+        return Err(format!("Klasör bulunamadı: {}", p.display()));
+    }
+    Ok(p)
+}
+
+#[tauri::command]
+pub fn opencode_set_live_model(model_ref: String) -> Result<(), String> {
+    let paths = OpenCodePaths::live()?;
+    opencode::set_active_model_in(&paths, &model_ref)
+}
+
+#[tauri::command]
+pub fn opencode_upsert_live_provider(
+    slug: String,
+    package: String,
+    name: String,
+    base_url: String,
+    api_key: String,
+    models: Vec<CustomModelDef>,
+    set_default_model: Option<String>,
+) -> Result<(), String> {
+    let clean_slug = crate::unified_vault::sanitize_provider_slug(&slug);
+    if clean_slug.is_empty() {
+        return Err("Sağlayıcı kimliği boş olamaz".into());
+    }
+    let paths = OpenCodePaths::live()?;
+    opencode::upsert_provider_in(
+        &paths,
+        &clean_slug,
+        &package,
+        &name,
+        &base_url,
+        &api_key,
+        &models,
+        set_default_model.as_deref(),
+    )
+}
+
+#[tauri::command]
+pub fn opencode_remove_live_provider(slug: String) -> Result<(), String> {
+    let paths = OpenCodePaths::live()?;
+    opencode::remove_provider_in(&paths, &slug)
+}
+
+#[tauri::command]
+pub async fn opencode_toggle_account(
+    app: AppHandle,
+    account_id: String,
+    enabled: bool,
+    model: Option<String>,
+) -> Result<(), String> {
+    let state = app.state::<AppState>();
+    let vault_key = state.vault_key();
+    let rec = {
+        let vault = state.vault.lock().unwrap();
+        vault
+            .find(&account_id)
+            .cloned()
+            .ok_or_else(|| "Hesap bulunamadı".to_string())?
+    };
+    if !rec.supports("opencode") {
+        return Err(format!("{} hesabı OpenCode ile kullanılamaz", rec.name));
+    }
+    let oc_paths = OpenCodePaths::live()?;
+
+    if enabled {
+        if !rec.enabled {
+            return Err("Seçilen hesap devre dışı — önce Hesaplar sekmesinden etkinleştirin.".into());
+        }
+        let clean_model = model
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(String::from);
+        if let Some(m) = &clean_model {
+            check_model(m)?;
+        }
+        let zcode_info = if rec.kind == "zcode_oauth" {
+            Some(ensure_zcode_service_ready(&app, &rec.id).await?)
+        } else {
+            None
+        };
+        opencode::apply_unified_account_at(
+            &oc_paths,
+            &rec,
+            &vault_key,
+            zcode_info.as_ref().map(|(e, k)| (e.as_str(), k.as_str())),
+            clean_model.as_deref(),
+            false,
+        )?;
+    } else {
+        opencode::remove_unified_account_at(&oc_paths, &rec)?;
+        let mut s = state.settings.lock().unwrap();
+        if s.opencode_active_session_id.as_deref() == Some(rec.id.as_str()) {
+            s.opencode_active_session_id = None;
+            s.opencode_active_model = None;
+            s.opencode_active_method = "disabled".into();
+            let _ = s.save(&state.paths);
+        }
+    }
+    emit_proxy_state(&app);
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn opencode_set_default_account(
+    app: AppHandle,
+    account_id: String,
+    model: Option<String>,
+) -> Result<(), String> {
+    activate_for_harness(app, "opencode".into(), account_id, model).await
+}
+
+// ---------------------------------------------------------------------------
+// ZCode Proxy Service Lifecycle, Quota, Logs & Config
+// ---------------------------------------------------------------------------
+
+#[tauri::command]
+pub async fn activate_account(app: AppHandle, id: String) -> Result<ProxyStatusDto, String> {
+    let state = app.state::<AppState>();
+    let vault_key = state.vault_key();
+
+    let (provider, plan, model) = {
+        let settings = state.settings.lock().unwrap().clone();
+        let mut vault = state.vault.lock().unwrap();
+        let rec = vault
+            .find(&id)
+            .ok_or_else(|| "Hesap bulunamadı".to_string())?
+            .clone();
+        if !rec.enabled {
+            return Err("Bu hesap devre dışı. Önce etkinleştirin.".into());
+        }
+        if rec.kind != "zcode_oauth" {
+            return Err("ZCode Proxy yalnızca ZCode OAuth hesapları ile çalışır (API anahtarları doğrudan bağlanır)".into());
+        }
+        let _ = rec.extract_zcode_credential(&vault_key)?;
+        let plan = rec
+            .default_plan
+            .clone()
+            .filter(|p| p == "start-plan" && rec.has_jwt)
+            .unwrap_or_else(|| {
+                if settings.default_plan == "start-plan" && rec.has_jwt {
+                    "start-plan".into()
+                } else {
+                    "coding-plan".into()
+                }
+            });
+        if let Some(r) = vault.find_mut(&id) {
+            r.last_used_at = Some(now_ms());
+        }
+        vault.save(&state.paths.unified_vault_file())?;
+        (rec.provider, plan, rec.default_model)
+    };
+
+    {
+        let mut s = state.settings.lock().unwrap();
+        s.zcode_service_account_id = Some(id);
+        s.save(&state.paths)?;
+    }
+
+    let mut updates = vec![
+        yamlpatch::update("provider", provider),
+        yamlpatch::update("plan", plan),
+    ];
+    if let Some(m) = &model {
+        updates.push(yamlpatch::update("defaultModel", m.clone()));
+    }
+    proxy::patch_proxy_config(&state.paths, &updates)?;
+
+    let alive = {
+        let settings = state.settings.lock().unwrap().clone();
+        let managed = state.proxy.lock().unwrap().clone();
+        proxy::status(&state.paths, &settings, &managed).process_alive
+    };
+    if alive {
+        stop_proxy_process(&app).await?;
+    }
+    start_proxy_process(&app).await?;
+    emit_proxy_state(&app);
+    Ok(build_status(&app))
+}
 
 async fn stop_proxy_process(app: &AppHandle) -> Result<(), String> {
     let state = app.state::<AppState>();
@@ -645,9 +1656,8 @@ async fn stop_proxy_process(app: &AppHandle) -> Result<(), String> {
 
 async fn start_proxy_process(app: &AppHandle) -> Result<(), String> {
     let state = app.state::<AppState>();
-    let exe = paths::resolve_proxy_exe();
+    let exe = state.paths.proxy_exe();
 
-    // Adopt a proxy left over from a previous session.
     {
         let settings = state.settings.lock().unwrap().clone();
         if let Some(adopted) = proxy::adopt_proxy(&settings) {
@@ -658,16 +1668,31 @@ async fn start_proxy_process(app: &AppHandle) -> Result<(), String> {
 
     let (settings, cred_json) = {
         let vault_key = state.vault_key();
+        let mut settings = state.settings.lock().unwrap();
         let vault = state.vault.lock().unwrap();
-        let rec = vault
-            .active()
-            .ok_or_else(|| "active_account_missing: Önce bir hesap ekleyin/etkinleştirin".to_string())?
+
+        let chosen = settings
+            .zcode_service_account_id
+            .as_deref()
+            .and_then(|id| vault.find(id))
+            .filter(|a| a.enabled && a.kind == "zcode_oauth")
+            .or_else(|| vault.first_enabled_zcode_service())
+            .ok_or_else(|| {
+                "active_account_missing: Önce Hesaplar sekmesinden bir ZCode OAuth hesabı ekleyin/etkinleştirin"
+                    .to_string()
+            })?
             .clone();
-        let cred = rec
-            .decrypt_credential(&vault_key)
+
+        if settings.zcode_service_account_id.as_deref() != Some(chosen.id.as_str()) {
+            settings.zcode_service_account_id = Some(chosen.id.clone());
+            let _ = settings.save(&state.paths);
+        }
+
+        let cred = chosen
+            .extract_zcode_credential(&vault_key)
             .map_err(|e| format!("hesap kimliği çözülemedi: {e}"))?;
         (
-            state.settings.lock().unwrap().clone(),
+            settings.clone(),
             serde_json::to_string(&cred).map_err(|e| e.to_string())?,
         )
     };
@@ -682,7 +1707,6 @@ async fn start_proxy_process(app: &AppHandle) -> Result<(), String> {
     .map_err(|e| e.to_string())??;
 
     {
-        // Persist the panel port we actually got.
         let mut s = state.settings.lock().unwrap();
         if s.panel_port != managed.panel_port {
             s.panel_port = managed.panel_port;
@@ -696,8 +1720,6 @@ async fn start_proxy_process(app: &AppHandle) -> Result<(), String> {
 #[tauri::command]
 pub async fn proxy_start(app: AppHandle) -> Result<ProxyStatusDto, String> {
     let state = app.state::<AppState>();
-
-    // Already running? Just make sure the server is up.
     {
         let settings = state.settings.lock().unwrap().clone();
         let managed = state.proxy.lock().unwrap().clone();
@@ -719,7 +1741,6 @@ pub async fn proxy_start(app: AppHandle) -> Result<ProxyStatusDto, String> {
 
 #[tauri::command]
 pub async fn proxy_stop(app: AppHandle) -> Result<ProxyStatusDto, String> {
-    // Server-level stop; the process (and panel: quota/logs) stays alive.
     panel(&app)?.stop_server()?;
     emit_proxy_state(&app);
     Ok(build_status(&app))
@@ -745,7 +1766,6 @@ pub fn proxy_status(app: AppHandle) -> ProxyStatusDto {
     build_status(&app)
 }
 
-/// Toggle used by the tray menu.
 pub fn toggle_proxy(app: &AppHandle) {
     let state = app.state::<AppState>();
     let st = {
@@ -779,21 +1799,14 @@ pub async fn proxy_test(app: AppHandle) -> Result<Value, String> {
         )
     };
     if port == 0 {
-        return Err("Proxy portu yapılandırılmamış".into());
+        return Ok(json!({ "ok": false, "message": "ZCode servis portu bulunamadı" }));
     }
-    let base = format!("http://127.0.0.1:{port}");
-    let key2 = key.clone();
-    let health = tauri::async_runtime::spawn_blocking(move || {
-        http::get(&format!("{base}/health"), &[("x-api-key", key2.as_str())], 8)
-    })
-    .await
-    .map_err(|e| e.to_string())?;
-    let models = tauri::async_runtime::spawn_blocking(move || {
-        http::get(
-            &format!("http://127.0.0.1:{port}/v1/models"),
-            &[("x-api-key", key.as_str())],
-            8,
-        )
+    let health_url = format!("http://127.0.0.1:{port}/health");
+    let models_url = format!("http://127.0.0.1:{port}/v1/models");
+    let (health, models) = tauri::async_runtime::spawn_blocking(move || {
+        let h = http::get(&health_url, &[], 5);
+        let m = http::get(&models_url, &[("x-api-key", key.as_str())], 8);
+        (h, m)
     })
     .await
     .map_err(|e| e.to_string())?;
@@ -813,21 +1826,16 @@ pub async fn proxy_test(app: AppHandle) -> Result<Value, String> {
         "health": health_ok,
         "modelsCount": models_count,
         "message": if health_ok {
-            format!("Proxy yanıt veriyor — {models_count} model listeleniyor")
+            format!("Servis yanıt veriyor — {models_count} model listeleniyor")
         } else {
-            "Proxy yanıt vermiyor".into()
+            "ZCode servisi yanıt vermiyor".into()
         }
     }))
 }
 
-// ---------------------------------------------------------------------------
-// Quota / logs
-// ---------------------------------------------------------------------------
-
 #[tauri::command]
 pub async fn fetch_quota(app: AppHandle) -> Result<Value, String> {
     let p = panel(&app)?;
-    // Unwrap the panel envelope: the frontend expects the inner QuotaSnapshot.
     let envelope = tauri::async_runtime::spawn_blocking(move || p.quota())
         .await
         .map_err(|e| e.to_string())??;
@@ -846,199 +1854,12 @@ pub async fn fetch_logs(app: AppHandle, since: i64) -> Result<Value, String> {
 pub fn read_error_logs(app: AppHandle, limit: usize) -> Result<Vec<Value>, String> {
     let state = app.state::<AppState>();
     let path = state.paths.proxy_errors_log();
-    let lines = proxy::tail_file(&path, limit.max(50).min(2000));
+    let lines = proxy::tail_file(&path, limit.clamp(50, 2000));
     Ok(lines
         .iter()
         .filter_map(|l| serde_json::from_str::<Value>(l).ok())
         .collect())
 }
-
-// ---------------------------------------------------------------------------
-// Models
-// ---------------------------------------------------------------------------
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ModelsInfo {
-    pub available: bool,
-    pub endpoint_models: Vec<String>,
-    pub config_models: Vec<String>,
-    pub default_model: String,
-}
-
-#[tauri::command]
-pub async fn list_models(app: AppHandle) -> Result<ModelsInfo, String> {
-    let state = app.state::<AppState>();
-    let cfg = proxy::read_proxy_config(&state.paths)?;
-    let config_models: Vec<String> = cfg
-        .get("models")
-        .and_then(|v| v.as_array())
-        .map(|seq| {
-            seq.iter()
-                .filter_map(|m| m.as_str().map(String::from))
-                .collect()
-        })
-        .unwrap_or_default();
-    let default_model = cfg
-        .get("defaultModel")
-        .and_then(|v| v.as_str())
-        .unwrap_or("glm-5.3")
-        .to_string();
-    let key = cfg
-        .pointer("/auth/proxyApiKey")
-        .and_then(|v| v.as_str())
-        .unwrap_or_default()
-        .to_string();
-    let port = cfg
-        .pointer("/server/port")
-        .and_then(|v| v.as_u64())
-        .unwrap_or_default() as u16;
-
-    let settings_models = state.settings.lock().unwrap().recent_models.clone();
-    let _ = settings_models; // surfaced to the UI via get_app_state
-
-    let endpoint_models = if port > 0 {
-        let url = format!("http://127.0.0.1:{port}/v1/models");
-        tauri::async_runtime::spawn_blocking(move || {
-            http::get(&url, &[("x-api-key", key.as_str())], 8).ok()
-        })
-        .await
-        .ok()
-        .flatten()
-        .and_then(|r| {
-            serde_json::from_str::<Value>(&r.body).ok().and_then(|v| {
-                v.get("data").and_then(|d| d.as_array()).map(|arr| {
-                    arr.iter()
-                        .filter_map(|m| m.get("id").and_then(|i| i.as_str()))
-                        .map(String::from)
-                        .collect::<Vec<_>>()
-                })
-            })
-        })
-        .unwrap_or_default()
-    } else {
-        Vec::new()
-    };
-
-    Ok(ModelsInfo {
-        available: port > 0,
-        endpoint_models,
-        config_models,
-        default_model,
-    })
-}
-
-#[tauri::command]
-pub async fn save_model_prefs(
-    app: AppHandle,
-    default_model: Option<String>,
-    custom_models: Option<Vec<String>>,
-    recent_model: Option<String>,
-) -> Result<(), String> {
-    let state = app.state::<AppState>();
-    let mut updates: Vec<YamlUpdate> = Vec::new();
-    if let Some(m) = &default_model {
-        check_model(m)?;
-        updates.push(yamlpatch::update("defaultModel", m.clone()));
-    }
-    if let Some(list) = &custom_models {
-        for m in list {
-            check_model(m)?;
-        }
-        updates.push(yamlpatch::update_list("models", list.clone()));
-    }
-    if !updates.is_empty() {
-        proxy::patch_proxy_config(&state.paths, &updates)?;
-    }
-    if let Some(m) = recent_model {
-        if claude::valid_model_name(&m) {
-            let mut s = state.settings.lock().unwrap();
-            s.recent_models.retain(|x| x != &m);
-            s.recent_models.insert(0, m);
-            s.recent_models.truncate(8);
-            s.save(&state.paths)?;
-        }
-    }
-    Ok(())
-}
-
-/// Real model-access test: a 1-token generation through the running proxy.
-#[tauri::command]
-pub async fn test_model(app: AppHandle, model: String) -> Result<TestResult, String> {
-    check_model(&model)?;
-    let state = app.state::<AppState>();
-    let cfg = proxy::read_proxy_config(&state.paths)?;
-    let port = cfg
-        .pointer("/server/port")
-        .and_then(|v| v.as_u64())
-        .unwrap_or_default() as u16;
-    let key = cfg
-        .pointer("/auth/proxyApiKey")
-        .and_then(|v| v.as_str())
-        .unwrap_or_default()
-        .to_string();
-    if port == 0 {
-        return Err("Proxy kapalı — önce proxy'yi başlatın".into());
-    }
-    {
-        let st = build_status(&app);
-        if !st.status.process_alive || !st.status.server_running {
-            return Err("Proxy çalışmıyor — önce proxy'yi başlatın".into());
-        }
-    }
-
-    let url = format!("http://127.0.0.1:{port}/v1/messages");
-    let body = json!({
-        "model": model,
-        "max_tokens": 1,
-        "messages": [{ "role": "user", "content": "hi" }]
-    });
-    let started = std::time::Instant::now();
-    let res = tauri::async_runtime::spawn_blocking(move || {
-        http::post_json(
-            &url,
-            &[("x-api-key", key.as_str())],
-            &body,
-            90,
-        )
-    })
-    .await
-    .map_err(|e| e.to_string())?;
-    let latency = started.elapsed().as_millis() as u64;
-
-    match res {
-        Ok(r) if r.status == 200 => {
-            let input = serde_json::from_str::<Value>(&r.body)
-                .ok()
-                .and_then(|v| {
-                    v.pointer("/usage/input_tokens")
-                        .and_then(|u| u.as_u64())
-                });
-            Ok(TestResult {
-                ok: true,
-                message: match input {
-                    Some(n) => format!("Model erişilebilir — gerçek yanıt alındı ({n} giriş token'i, {latency} ms)"),
-                    None => format!("Model erişilebilir — gerçek yanıt alındı ({latency} ms)"),
-                },
-                latency_ms: Some(latency),
-            })
-        }
-        Ok(r) => Ok(TestResult {
-            ok: false,
-            message: http::friendly_http_error(r.status, &r.body),
-            latency_ms: Some(latency),
-        }),
-        Err(e) => Ok(TestResult {
-            ok: false,
-            message: format!("İstek gönderilemedi: {e}"),
-            latency_ms: None,
-        }),
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Config
-// ---------------------------------------------------------------------------
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -1121,12 +1942,9 @@ pub async fn save_config(app: AppHandle, updates: ConfigUpdates) -> Result<Confi
         }
         let current = proxy::config_port(&state.paths);
         if port != current {
-            // Refuse a port someone else already holds (unless it is us).
             let managed = state.proxy.lock().unwrap().clone();
             if proxy::port_in_use(port) && managed.panel_port != port {
-                return Err(format!(
-                    "{port} portu başka bir uygulama tarafından kullanılıyor"
-                ));
+                return Err(format!("{port} portu başka bir uygulama tarafından kullanılıyor"));
             }
             needs_restart = true;
         }
@@ -1146,11 +1964,10 @@ pub async fn save_config(app: AppHandle, updates: ConfigUpdates) -> Result<Confi
             yaml_updates.push(yamlpatch::update_under("auth", "proxyApiKey", "null"));
         } else {
             if k.len() < 8 {
-                return Err("Proxy anahtarı en az 8 karakter olmalı (güvenlik)".into());
+                return Err("Proxy anahtarı en az 8 karakter olmalı".into());
             }
             yaml_updates.push(yamlpatch::update_under("auth", "proxyApiKey", format!("\"{k}\"")));
         }
-        // The running server already enforces the old key; restart to apply.
         needs_restart = true;
     }
     if let Some(p) = &updates.provider {
@@ -1194,1057 +2011,61 @@ pub async fn save_config(app: AppHandle, updates: ConfigUpdates) -> Result<Confi
     })
 }
 
-// ---------------------------------------------------------------------------
-// Claude Code
-// ---------------------------------------------------------------------------
-
 #[tauri::command]
-pub async fn claude_detect() -> Result<claude::ClaudeInfo, String> {
-    tauri::async_runtime::spawn_blocking(claude::detect)
-        .await
-        .map_err(|e| e.to_string())
-}
-
-#[tauri::command]
-pub async fn claude_launch(
-    app: AppHandle,
-    mode: String,
-    model: Option<String>,
-    folder: Option<String>,
-) -> Result<(), String> {
-    if mode != "proxy" && mode != "normal" {
-        return Err("Geçersiz mod".into());
-    }
+pub async fn test_model(app: AppHandle, model: String) -> Result<TestResult, String> {
+    check_model(&model)?;
     let state = app.state::<AppState>();
-    let settings = state.settings.lock().unwrap().clone();
-
-    let folder = folder
-        .filter(|f| !f.trim().is_empty())
-        .or_else(|| settings.claude_default_folder.clone())
-        .or_else(|| std::env::var("USERPROFILE").ok())
-        .ok_or_else(|| "Proje klasörü belirlenemedi".to_string())?;
-
-    let (endpoint, key, model) = if mode == "proxy" {
-        let st = build_status(&app);
-        if !st.status.process_alive || !st.status.server_running {
-            return Err("Proxy çalışmıyor — önce proxy'yi başlatın ya da Normal mod kullanın".into());
-        }
-        let cfg = proxy::read_proxy_config(&state.paths)?;
-        let port = cfg
-            .pointer("/server/port")
-            .and_then(|v| v.as_u64())
-            .unwrap_or_default() as u16;
-        let key = cfg
-            .pointer("/auth/proxyApiKey")
-            .and_then(|v| v.as_str())
-            .unwrap_or_default()
-            .to_string();
-        let model = model
-            .or_else(|| {
-                let active = state.vault.lock().unwrap().active().cloned();
-                active
-                    .and_then(|a| a.default_model)
-                    .or(Some(settings.default_model.clone()))
-            })
-            .unwrap_or_else(|| "glm-5.3".to_string());
-        (Some(format!("http://127.0.0.1:{port}")), Some(key), Some(model))
-    } else {
-        (None, None, model.filter(|m| claude::valid_model_name(m)))
-    };
-
-    if let Some(m) = &model {
-        check_model(m)?;
-    }
-
-    let launches = state.paths.launches_dir().clone();
-    let folder_disp = folder.clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        claude::launch(
-            &launches,
-            claude::LaunchOptions {
-                mode: if mode == "proxy" { "proxy" } else { "normal" },
-                model: model.as_deref(),
-                folder: Some(&folder_disp),
-                endpoint: endpoint.as_deref(),
-                proxy_api_key: key.as_deref(),
-            },
-        )
-    })
-    .await
-    .map_err(|e| e.to_string())??;
-
-    // Remember the folder.
-    {
-        let mut s = state.settings.lock().unwrap();
-        s.recent_folders.retain(|f| f != &folder);
-        s.recent_folders.insert(0, folder.clone());
-        s.recent_folders.truncate(10);
-        let _ = s.save(&state.paths);
-    }
-    Ok(())
-}
-
-#[tauri::command]
-pub fn push_recent_folder(app: AppHandle, folder: String) -> Result<(), String> {
-    let state = app.state::<AppState>();
-    let mut s = state.settings.lock().unwrap();
-    s.recent_folders.retain(|f| f != &folder);
-    s.recent_folders.insert(0, folder);
-    s.recent_folders.truncate(10);
-    s.save(&state.paths)
-}
-
-#[tauri::command]
-pub fn get_versions(app: AppHandle) -> Versions {
-    let exe = paths::resolve_proxy_exe();
-    Versions {
-        app: app.package_info().version.to_string(),
-        proxy: claude::proxy_exe_version(&exe),
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Multi-harness session management (Claude Code / OpenCode / Antigravity CLI)
-// ---------------------------------------------------------------------------
-
-fn resolve_folder(app: &AppHandle, folder: Option<String>) -> Result<std::path::PathBuf, String> {
-    let state = app.state::<AppState>();
-    let settings = state.settings.lock().unwrap().clone();
-    let chosen = folder
-        .filter(|f| !f.trim().is_empty())
-        .or_else(|| settings.claude_default_folder.clone())
-        .or_else(|| std::env::var("USERPROFILE").ok())
-        .ok_or_else(|| "Proje klasörü belirlenemedi".to_string())?;
-    let path = std::path::PathBuf::from(&chosen);
-    if !path.is_dir() {
-        return Err(format!("Klasör bulunamadı: {}", path.display()));
-    }
-    {
-        let mut s = state.settings.lock().unwrap();
-        s.recent_folders.retain(|f| f != &chosen);
-        s.recent_folders.insert(0, chosen);
-        s.recent_folders.truncate(10);
-        let _ = s.save(&state.paths);
-    }
-    Ok(path)
-}
-
-async fn ensure_zcode_proxy_ready(
-    app: &AppHandle,
-    zcode_account_id: &str,
-) -> Result<(String, String), String> {
-    let state = app.state::<AppState>();
-    let already_active_and_up = {
-        let vault = state.vault.lock().unwrap();
-        let rec = vault
-            .accounts
-            .iter()
-            .find(|a| a.id == zcode_account_id)
-            .ok_or_else(|| "ZCode hesabı bulunamadı".to_string())?;
-        if !rec.enabled {
-            return Err("Seçilen ZCode hesabı devre dışı. Önce hesabı etkinleştirin.".into());
-        }
-        let is_active = vault.is_active(zcode_account_id);
-        let st = build_status(app);
-        is_active && st.status.process_alive && st.status.server_running
-    };
-
-    if !already_active_and_up {
-        activate_account(app.clone(), zcode_account_id.to_string()).await?;
-    }
-
     let cfg = proxy::read_proxy_config(&state.paths)?;
     let port = cfg
         .pointer("/server/port")
         .and_then(|v| v.as_u64())
         .unwrap_or_default() as u16;
-    if port == 0 {
-        return Err("ZCode proxy portu yapılandırılmamış".into());
-    }
     let key = cfg
         .pointer("/auth/proxyApiKey")
         .and_then(|v| v.as_str())
         .unwrap_or_default()
         .to_string();
-    Ok((format!("http://127.0.0.1:{port}"), key))
-}
-
-#[tauri::command]
-pub fn update_session(
-    app: AppHandle,
-    id: String,
-    name: String,
-) -> Result<Vec<HarnessSessionSummary>, String> {
-    let trimmed = name.trim();
-    if trimmed.is_empty() {
-        return Err("Oturum adı boş olamaz".into());
-    }
-    let state = app.state::<AppState>();
-    let settings = state.settings.lock().unwrap().clone();
-    let mut sessions = state.sessions.lock().unwrap();
-    let rec = sessions
-        .sessions
-        .iter_mut()
-        .find(|s| s.id == id)
-        .ok_or_else(|| "Oturum bulunamadı".to_string())?;
-    rec.name = trimmed.to_string();
-    sessions.save(&state.paths.sessions_file())?;
-    Ok(sessions.summaries(
-        settings.claude_active_session_id.as_deref(),
-        settings.opencode_active_session_id.as_deref(),
-        settings.antigravity_active_session_id.as_deref(),
-    ))
-}
-
-#[tauri::command]
-pub fn set_session_enabled(
-    app: AppHandle,
-    id: String,
-    enabled: bool,
-) -> Result<Vec<HarnessSessionSummary>, String> {
-    let (harness, was_active) = {
-        let state = app.state::<AppState>();
-        let settings = state.settings.lock().unwrap().clone();
-        let mut sessions = state.sessions.lock().unwrap();
-        let rec = sessions
-            .sessions
-            .iter_mut()
-            .find(|s| s.id == id)
-            .ok_or_else(|| "Oturum bulunamadı".to_string())?;
-        rec.enabled = enabled;
-        let h = rec.harness.clone();
-        let active = match h.as_str() {
-            "claude" => settings.claude_active_session_id.as_deref() == Some(id.as_str()),
-            "opencode" => settings.opencode_active_session_id.as_deref() == Some(id.as_str()),
-            "antigravity" => settings.antigravity_active_session_id.as_deref() == Some(id.as_str()),
-            _ => false,
-        };
-        sessions.save(&state.paths.sessions_file())?;
-        (h, active)
-    };
-
-    if !enabled && was_active {
-        match harness.as_str() {
-            "claude" => {
-                let state = app.state::<AppState>();
-                let vault_key = state.vault_key();
-                let sessions = state.sessions.lock().unwrap();
-                if let Ok(paths) = ClaudePaths::live() {
-                    let _ = claude_harness::disable_at(&paths, true, &sessions, &vault_key);
-                }
-                let mut s = state.settings.lock().unwrap();
-                s.claude_active_method = "disabled".into();
-                s.claude_active_session_id = None;
-                s.claude_active_model = None;
-                let _ = s.save(&state.paths);
-            }
-            "opencode" => {
-                let state = app.state::<AppState>();
-                let vault_key = state.vault_key();
-                let sessions = state.sessions.lock().unwrap();
-                if let Ok(paths) = OpenCodePaths::live() {
-                    let _ = opencode::disable_at(&paths, &sessions, &vault_key);
-                }
-                let mut s = state.settings.lock().unwrap();
-                s.opencode_active_session_id = None;
-                let _ = s.save(&state.paths);
-            }
-            "antigravity" => {
-                let state = app.state::<AppState>();
-                let vault_key = state.vault_key();
-                let sessions = state.sessions.lock().unwrap();
-                let _ = antigravity::disable(&sessions, &vault_key);
-                let mut s = state.settings.lock().unwrap();
-                s.antigravity_active_session_id = None;
-                let _ = s.save(&state.paths);
-            }
-            _ => {}
-        }
-    }
-
-    let state = app.state::<AppState>();
-    let settings = state.settings.lock().unwrap().clone();
-    let sessions = state.sessions.lock().unwrap();
-    Ok(sessions.summaries(
-        settings.claude_active_session_id.as_deref(),
-        settings.opencode_active_session_id.as_deref(),
-        settings.antigravity_active_session_id.as_deref(),
-    ))
-}
-
-#[tauri::command]
-pub fn delete_session(app: AppHandle, id: String) -> Result<Value, String> {
-    let state = app.state::<AppState>();
-    {
-        let mut sessions = state.sessions.lock().unwrap();
-        let before = sessions.sessions.len();
-        sessions.sessions.retain(|s| s.id != id);
-        if sessions.sessions.len() == before {
-            return Err("Oturum bulunamadı".into());
-        }
-        sessions.save(&state.paths.sessions_file())?;
+    if port == 0 {
+        return Err("ZCode servisi kapalı — önce servisi başlatın".into());
     }
     {
-        let mut s = state.settings.lock().unwrap();
-        let mut changed = false;
-        if s.claude_active_session_id.as_deref() == Some(id.as_str()) {
-            s.claude_active_session_id = None;
-            changed = true;
-        }
-        if s.opencode_active_session_id.as_deref() == Some(id.as_str()) {
-            s.opencode_active_session_id = None;
-            changed = true;
-        }
-        if s.antigravity_active_session_id.as_deref() == Some(id.as_str()) {
-            s.antigravity_active_session_id = None;
-            changed = true;
-        }
-        if changed {
-            let _ = s.save(&state.paths);
+        let st = build_status(&app);
+        if !st.status.process_alive || !st.status.server_running {
+            return Err("ZCode servisi çalışmıyor — önce servisi başlatın".into());
         }
     }
-    Ok(json!({ "ok": true }))
-}
 
-#[tauri::command]
-pub fn cancel_harness_oauth(app: AppHandle) {
-    let state = app.state::<AppState>();
-    let mut flow = state.harness_oauth.lock().unwrap();
-    flow.running = false;
-    flow.child_pid = None;
-    if let Some(dir) = flow.temp_dir.take() {
-        let _ = std::fs::remove_dir_all(dir);
+    let url = format!("http://127.0.0.1:{port}/v1/messages");
+    let body = json!({
+        "model": model,
+        "max_tokens": 1,
+        "messages": [{ "role": "user", "content": "hi" }]
+    });
+    let started = std::time::Instant::now();
+    let res = tauri::async_runtime::spawn_blocking(move || {
+        http::post_json(&url, &[("x-api-key", key.as_str())], &body, 90)
+    })
+    .await
+    .map_err(|e| e.to_string())?;
+    let latency = started.elapsed().as_millis() as u64;
+
+    match res {
+        Ok(r) if r.status == 200 => Ok(TestResult {
+            ok: true,
+            message: format!("Model yanıt verdi ({latency} ms)"),
+            latency_ms: Some(latency),
+        }),
+        Ok(r) => Ok(TestResult {
+            ok: false,
+            message: http::friendly_http_error(r.status, &r.body),
+            latency_ms: Some(latency),
+        }),
+        Err(e) => Ok(TestResult {
+            ok: false,
+            message: format!("İstek gönderilemedi: {e}"),
+            latency_ms: None,
+        }),
     }
-}
-
-// --- Claude Code multi-method ---
-
-#[tauri::command]
-pub fn claude_capture_oauth(
-    app: AppHandle,
-    name: Option<String>,
-) -> Result<HarnessSessionSummary, String> {
-    let paths = ClaudePaths::live()?;
-    let state = app.state::<AppState>();
-    let vault_key = state.vault_key();
-    let rec = claude_harness::capture_current_oauth_at(&paths, &vault_key, name.as_deref())?;
-    let id = rec.id.clone();
-    let mut sessions = state.sessions.lock().unwrap();
-    sessions.sessions.push(rec);
-    sessions.save(&state.paths.sessions_file())?;
-    let settings = state.settings.lock().unwrap().clone();
-    let summary = sessions
-        .sessions
-        .iter()
-        .find(|s| s.id == id)
-        .map(|s| s.summary(settings.claude_active_session_id.as_deref() == Some(id.as_str())))
-        .ok_or_else(|| "Kayıt bulunamadı".to_string())?;
-    Ok(summary)
-}
-
-#[tauri::command]
-pub fn claude_start_oauth_login(app: AppHandle, name: Option<String>) -> Result<(), String> {
-    claude_harness::start_oauth_login(&app, name)
-}
-
-#[tauri::command]
-pub fn claude_add_api_session(
-    app: AppHandle,
-    name: String,
-    provider_id: String,
-    api_key: String,
-    base_url: Option<String>,
-    model: Option<String>,
-) -> Result<HarnessSessionSummary, String> {
-    let state = app.state::<AppState>();
-    let vault_key = state.vault_key();
-    let rec = claude_harness::create_api_session(
-        &vault_key,
-        &name,
-        &provider_id,
-        &api_key,
-        base_url.as_deref(),
-        model.as_deref(),
-    )?;
-    let id = rec.id.clone();
-    let mut sessions = state.sessions.lock().unwrap();
-    sessions.sessions.push(rec);
-    sessions.save(&state.paths.sessions_file())?;
-    let settings = state.settings.lock().unwrap().clone();
-    sessions
-        .sessions
-        .iter()
-        .find(|s| s.id == id)
-        .map(|s| s.summary(settings.claude_active_session_id.as_deref() == Some(id.as_str())))
-        .ok_or_else(|| "Kayıt bulunamadı".to_string())
-}
-
-#[tauri::command]
-pub fn claude_edit_session(
-    app: AppHandle,
-    id: String,
-    name: Option<String>,
-    provider_id: Option<String>,
-    api_key: Option<String>,
-    base_url: Option<String>,
-    model: Option<String>,
-) -> Result<Vec<HarnessSessionSummary>, String> {
-    let state = app.state::<AppState>();
-    let vault_key = state.vault_key();
-    let settings = state.settings.lock().unwrap().clone();
-    let mut sessions = state.sessions.lock().unwrap();
-    let rec = sessions
-        .sessions
-        .iter_mut()
-        .find(|s| s.id == id && s.harness == "claude")
-        .ok_or("Claude Code oturumu bulunamadı")?;
-    claude_harness::update_api_session(
-        rec,
-        &vault_key,
-        name.as_deref(),
-        provider_id.as_deref(),
-        api_key.as_deref(),
-        base_url.as_deref(),
-        model.as_deref(),
-    )?;
-    sessions.save(&state.paths.sessions_file())?;
-    Ok(sessions.summaries(
-        settings.claude_active_session_id.as_deref(),
-        settings.opencode_active_session_id.as_deref(),
-        settings.antigravity_active_session_id.as_deref(),
-    ))
-}
-
-#[tauri::command]
-pub async fn claude_set_method(
-    app: AppHandle,
-    method: String,
-    target_id: Option<String>,
-    model: Option<String>,
-    clear_oauth_credentials: Option<bool>,
-) -> Result<(), String> {
-    let paths = ClaudePaths::live()?;
-    let state = app.state::<AppState>();
-    let vault_key = state.vault_key();
-
-    match method.as_str() {
-        "claude_oauth" => {
-            let sid = target_id
-                .filter(|s| !s.trim().is_empty())
-                .ok_or("Bir Claude OAuth oturumu seçin")?;
-            let payload = {
-                let mut sessions = state.sessions.lock().unwrap();
-                let rec = sessions
-                    .sessions
-                    .iter_mut()
-                    .find(|s| s.id == sid && s.harness == "claude")
-                    .ok_or("Claude OAuth oturumu bulunamadı")?;
-                if !rec.enabled {
-                    return Err("Bu oturum devre dışı. Önce etkinleştirin.".into());
-                }
-                let payload = rec.decrypt_payload(&vault_key)?;
-                rec.last_used_at = Some(now_ms());
-                sessions.save(&state.paths.sessions_file())?;
-                payload
-            };
-            claude_harness::apply_claude_oauth_at(&paths, &payload)?;
-            let mut s = state.settings.lock().unwrap();
-            s.claude_active_method = "claude_oauth".into();
-            s.claude_active_session_id = Some(sid);
-            s.claude_active_model = None;
-            s.save(&state.paths)?;
-        }
-        "zcode_oauth" => {
-            let acc_id = target_id
-                .filter(|s| !s.trim().is_empty())
-                .ok_or("Bir ZCode hesabı seçin")?;
-            let (endpoint, proxy_key) = ensure_zcode_proxy_ready(&app, &acc_id).await?;
-            let chosen_model = {
-                let settings = state.settings.lock().unwrap().clone();
-                let vault = state.vault.lock().unwrap();
-                let acc_model = vault
-                    .accounts
-                    .iter()
-                    .find(|a| a.id == acc_id)
-                    .and_then(|a| a.default_model.clone());
-                model
-                    .filter(|m| !m.trim().is_empty())
-                    .or(acc_model)
-                    .unwrap_or_else(|| settings.default_model.clone())
-            };
-            let token = if proxy_key.trim().is_empty() {
-                "harnessauth-local"
-            } else {
-                proxy_key.trim()
-            };
-            claude_harness::apply_env_bridge_at(&paths, &endpoint, token, Some(&chosen_model))?;
-            let mut s = state.settings.lock().unwrap();
-            s.claude_active_method = "zcode_oauth".into();
-            s.claude_active_session_id = Some(acc_id);
-            s.claude_active_model = Some(chosen_model);
-            s.save(&state.paths)?;
-        }
-        "z_api" => {
-            let acc_id = target_id
-                .filter(|s| !s.trim().is_empty())
-                .ok_or("Bir Z API hesabı seçin")?;
-            let (base_url, token, chosen_model) = {
-                let settings = state.settings.lock().unwrap().clone();
-                let mut vault = state.vault.lock().unwrap();
-                let rec = vault
-                    .accounts
-                    .iter_mut()
-                    .find(|a| a.id == acc_id)
-                    .ok_or("Z API hesabı bulunamadı")?;
-                if !rec.enabled {
-                    return Err("Bu Z API hesabı devre dışı. Önce etkinleştirin.".into());
-                }
-                let cred = rec.decrypt_credential(&vault_key)?;
-                let api_key = cred
-                    .get("apiKey")
-                    .and_then(|v| v.as_str())
-                    .ok_or("Hesapta apiKey bulunamadı")?;
-                let joined = match cred.get("secret").and_then(|v| v.as_str()) {
-                    Some(sec) if !sec.is_empty() => format!("{api_key}.{sec}"),
-                    _ => api_key.to_string(),
-                };
-                let base_url =
-                    claude_harness::resolve_z_api_base(&rec.provider, rec.base_url.as_deref())?;
-                let m = model
-                    .filter(|x| !x.trim().is_empty())
-                    .or_else(|| rec.default_model.clone())
-                    .unwrap_or_else(|| settings.default_model.clone());
-                rec.last_used_at = Some(now_ms());
-                vault.save(&state.paths.vault_file())?;
-                (base_url, joined, m)
-            };
-            claude_harness::apply_env_bridge_at(&paths, &base_url, &token, Some(&chosen_model))?;
-            let mut s = state.settings.lock().unwrap();
-            s.claude_active_method = "z_api".into();
-            s.claude_active_session_id = Some(acc_id);
-            s.claude_active_model = Some(chosen_model);
-            s.save(&state.paths)?;
-        }
-        "custom_api" => {
-            let sid = target_id
-                .filter(|s| !s.trim().is_empty())
-                .ok_or("Bir Claude API oturumu seçin")?;
-            let (payload, meta_model) = {
-                let mut sessions = state.sessions.lock().unwrap();
-                let rec = sessions
-                    .sessions
-                    .iter_mut()
-                    .find(|s| s.id == sid && s.harness == "claude" && s.kind == "claude_api")
-                    .ok_or("Claude API oturumu bulunamadı")?;
-                if !rec.enabled {
-                    return Err("Bu oturum devre dışı. Önce etkinleştirin.".into());
-                }
-                let payload = rec.decrypt_payload(&vault_key)?;
-                let meta_model = payload
-                    .get("model")
-                    .and_then(|v| v.as_str())
-                    .map(String::from);
-                rec.last_used_at = Some(now_ms());
-                sessions.save(&state.paths.sessions_file())?;
-                (payload, meta_model)
-            };
-            let chosen_model = model
-                .filter(|m| !m.trim().is_empty())
-                .or(meta_model);
-            claude_harness::apply_claude_api_at(&paths, &payload, chosen_model.as_deref())?;
-            let mut s = state.settings.lock().unwrap();
-            s.claude_active_method = "custom_api".into();
-            s.claude_active_session_id = Some(sid);
-            s.claude_active_model = chosen_model;
-            s.save(&state.paths)?;
-        }
-        "disabled" => {
-            let backup = {
-                let sessions = state.sessions.lock().unwrap();
-                claude_harness::disable_at(
-                    &paths,
-                    clear_oauth_credentials.unwrap_or(true),
-                    &sessions,
-                    &vault_key,
-                )?
-            };
-            if let Some(rec) = backup {
-                let mut sessions = state.sessions.lock().unwrap();
-                sessions.sessions.push(rec);
-                sessions.save(&state.paths.sessions_file())?;
-            }
-            let mut s = state.settings.lock().unwrap();
-            s.claude_active_method = "disabled".into();
-            s.claude_active_session_id = None;
-            s.claude_active_model = None;
-            s.save(&state.paths)?;
-        }
-        other => return Err(format!("Geçersiz Claude Code yöntemi: {other}")),
-    }
-
-    emit_proxy_state(&app);
-    Ok(())
-}
-
-#[tauri::command]
-pub async fn claude_launch_folder(app: AppHandle, folder: Option<String>) -> Result<(), String> {
-    let dir = resolve_folder(&app, folder)?;
-    let launches = app.state::<AppState>().paths.launches_dir();
-    tauri::async_runtime::spawn_blocking(move || claude_harness::launch_claude_folder(&launches, &dir))
-        .await
-        .map_err(|e| e.to_string())?
-}
-
-// --- OpenCode ---
-
-#[tauri::command]
-pub fn opencode_capture_current(
-    app: AppHandle,
-    name: Option<String>,
-) -> Result<HarnessSessionSummary, String> {
-    let paths = OpenCodePaths::live()?;
-    let state = app.state::<AppState>();
-    let vault_key = state.vault_key();
-    let rec = opencode::capture_current_at(&paths, &vault_key, name.as_deref())?;
-    let id = rec.id.clone();
-    let mut sessions = state.sessions.lock().unwrap();
-    sessions.sessions.push(rec);
-    sessions.save(&state.paths.sessions_file())?;
-    let settings = state.settings.lock().unwrap().clone();
-    sessions
-        .sessions
-        .iter()
-        .find(|s| s.id == id)
-        .map(|s| s.summary(settings.opencode_active_session_id.as_deref() == Some(id.as_str())))
-        .ok_or_else(|| "Kayıt bulunamadı".to_string())
-}
-
-#[tauri::command]
-pub fn opencode_add_api_session(
-    app: AppHandle,
-    name: String,
-    provider_id: String,
-    api_key: String,
-    base_url: Option<String>,
-    model: Option<String>,
-) -> Result<HarnessSessionSummary, String> {
-    let state = app.state::<AppState>();
-    let vault_key = state.vault_key();
-    let rec = opencode::create_api_session(
-        &vault_key,
-        &name,
-        &provider_id,
-        &api_key,
-        base_url.as_deref(),
-        model.as_deref(),
-    )?;
-    let id = rec.id.clone();
-    let mut sessions = state.sessions.lock().unwrap();
-    sessions.sessions.push(rec);
-    sessions.save(&state.paths.sessions_file())?;
-    let settings = state.settings.lock().unwrap().clone();
-    sessions
-        .sessions
-        .iter()
-        .find(|s| s.id == id)
-        .map(|s| s.summary(settings.opencode_active_session_id.as_deref() == Some(id.as_str())))
-        .ok_or_else(|| "Kayıt bulunamadı".to_string())
-}
-
-#[tauri::command]
-pub fn opencode_add_zcode_session(
-    app: AppHandle,
-    name: String,
-    zcode_account_id: String,
-    model: Option<String>,
-) -> Result<HarnessSessionSummary, String> {
-    let state = app.state::<AppState>();
-    let acc_name = {
-        let vault = state.vault.lock().unwrap();
-        let rec = vault
-            .accounts
-            .iter()
-            .find(|a| a.id == zcode_account_id)
-            .ok_or("ZCode hesabı bulunamadı")?;
-        rec.name.clone()
-    };
-    let vault_key = state.vault_key();
-    let rec = opencode::create_zcode_bridge_session(
-        &vault_key,
-        &name,
-        &zcode_account_id,
-        &acc_name,
-        model.as_deref(),
-    )?;
-    let id = rec.id.clone();
-    let mut sessions = state.sessions.lock().unwrap();
-    sessions.sessions.push(rec);
-    sessions.save(&state.paths.sessions_file())?;
-    let settings = state.settings.lock().unwrap().clone();
-    sessions
-        .sessions
-        .iter()
-        .find(|s| s.id == id)
-        .map(|s| s.summary(settings.opencode_active_session_id.as_deref() == Some(id.as_str())))
-        .ok_or_else(|| "Kayıt bulunamadı".to_string())
-}
-
-#[tauri::command]
-pub fn opencode_start_oauth_login(app: AppHandle, name: Option<String>) -> Result<(), String> {
-    opencode::start_oauth_login(&app, name)
-}
-
-#[tauri::command]
-pub async fn opencode_activate_session(app: AppHandle, id: String) -> Result<(), String> {
-    let paths = OpenCodePaths::live()?;
-    let state = app.state::<AppState>();
-    let vault_key = state.vault_key();
-    let rec = {
-        let sessions = state.sessions.lock().unwrap();
-        sessions
-            .sessions
-            .iter()
-            .find(|s| s.id == id && s.harness == "opencode")
-            .cloned()
-            .ok_or("OpenCode oturumu bulunamadı")?
-    };
-    if !rec.enabled {
-        return Err("Bu OpenCode oturumu devre dışı. Önce etkinleştirin.".into());
-    }
-
-    let zcode_info = if rec.kind == "opencode_zcode_proxy" {
-        let payload = rec.decrypt_payload(&vault_key)?;
-        let acc_id = payload
-            .get("zcodeAccountId")
-            .and_then(|v| v.as_str())
-            .ok_or("ZCode hesap kimliği eksik")?
-            .to_string();
-        Some(ensure_zcode_proxy_ready(&app, &acc_id).await?)
-    } else {
-        None
-    };
-
-    opencode::activate_session_at(
-        &paths,
-        &rec,
-        &vault_key,
-        zcode_info
-            .as_ref()
-            .map(|(e, k)| (e.as_str(), k.as_str())),
-    )?;
-
-    {
-        let mut sessions = state.sessions.lock().unwrap();
-        if let Some(r) = sessions.sessions.iter_mut().find(|s| s.id == id) {
-            r.last_used_at = Some(now_ms());
-        }
-        sessions.save(&state.paths.sessions_file())?;
-    }
-    {
-        let mut s = state.settings.lock().unwrap();
-        s.opencode_active_method = "profile".into();
-        s.opencode_active_session_id = Some(id);
-        s.opencode_active_model = rec
-            .meta
-            .get("model")
-            .and_then(|v| v.as_str())
-            .map(String::from);
-        s.save(&state.paths)?;
-    }
-    Ok(())
-}
-
-#[tauri::command]
-pub async fn opencode_set_method(
-    app: AppHandle,
-    method: String,
-    target_id: Option<String>,
-    model: Option<String>,
-) -> Result<(), String> {
-    let paths = OpenCodePaths::live()?;
-    let state = app.state::<AppState>();
-    let vault_key = state.vault_key();
-
-    match method.as_str() {
-        "profile" => {
-            let sid = target_id
-                .filter(|s| !s.trim().is_empty())
-                .ok_or("Bir OpenCode oturumu seçin")?;
-            return opencode_activate_session(app, sid).await;
-        }
-        "zcode_oauth" => {
-            let acc_id = target_id
-                .filter(|s| !s.trim().is_empty())
-                .ok_or("Bir ZCode OAuth hesabı seçin")?;
-            let (endpoint, proxy_key) = ensure_zcode_proxy_ready(&app, &acc_id).await?;
-            let chosen_model = {
-                let settings = state.settings.lock().unwrap().clone();
-                let vault = state.vault.lock().unwrap();
-                let acc_model = vault
-                    .accounts
-                    .iter()
-                    .find(|a| a.id == acc_id)
-                    .and_then(|a| a.default_model.clone());
-                model
-                    .filter(|m| !m.trim().is_empty())
-                    .or(acc_model)
-                    .unwrap_or_else(|| settings.default_model.clone())
-            };
-            opencode::activate_zcode_oauth_direct_at(
-                &paths,
-                &endpoint,
-                &proxy_key,
-                Some(&chosen_model),
-            )?;
-            let mut s = state.settings.lock().unwrap();
-            s.opencode_active_method = "zcode_oauth".into();
-            s.opencode_active_session_id = Some(acc_id);
-            s.opencode_active_model = Some(chosen_model);
-            s.save(&state.paths)?;
-        }
-        "z_api" => {
-            let acc_id = target_id
-                .filter(|s| !s.trim().is_empty())
-                .ok_or("Bir Z API hesabı seçin")?;
-            let (provider, token, custom_base, chosen_model) = {
-                let settings = state.settings.lock().unwrap().clone();
-                let mut vault = state.vault.lock().unwrap();
-                let rec = vault
-                    .accounts
-                    .iter_mut()
-                    .find(|a| a.id == acc_id)
-                    .ok_or("Z API hesabı bulunamadı")?;
-                if !rec.enabled {
-                    return Err("Bu Z API hesabı devre dışı. Önce etkinleştirin.".into());
-                }
-                let cred = rec.decrypt_credential(&vault_key)?;
-                let api_key = cred
-                    .get("apiKey")
-                    .and_then(|v| v.as_str())
-                    .ok_or("Hesapta apiKey bulunamadı")?;
-                let joined = match cred.get("secret").and_then(|v| v.as_str()) {
-                    Some(sec) if !sec.is_empty() => format!("{api_key}.{sec}"),
-                    _ => api_key.to_string(),
-                };
-                let m = model
-                    .filter(|x| !x.trim().is_empty())
-                    .or_else(|| rec.default_model.clone())
-                    .unwrap_or_else(|| settings.default_model.clone());
-                rec.last_used_at = Some(now_ms());
-                let provider = rec.provider.clone();
-                let base_url = rec.base_url.clone();
-                vault.save(&state.paths.vault_file())?;
-                (provider, joined, base_url, m)
-            };
-            opencode::activate_z_api_direct_at(
-                &paths,
-                &provider,
-                &token,
-                custom_base.as_deref(),
-                Some(&chosen_model),
-            )?;
-            let mut s = state.settings.lock().unwrap();
-            s.opencode_active_method = "z_api".into();
-            s.opencode_active_session_id = Some(acc_id);
-            s.opencode_active_model = Some(chosen_model);
-            s.save(&state.paths)?;
-        }
-        "disabled" => {
-            return opencode_disable(app);
-        }
-        other => return Err(format!("Geçersiz OpenCode yöntemi: {other}")),
-    }
-
-    emit_proxy_state(&app);
-    Ok(())
-}
-
-#[tauri::command]
-pub fn opencode_edit_session(
-    app: AppHandle,
-    id: String,
-    name: Option<String>,
-    provider_id: Option<String>,
-    api_key: Option<String>,
-    base_url: Option<String>,
-    model: Option<String>,
-    zcode_account_id: Option<String>,
-) -> Result<Vec<HarnessSessionSummary>, String> {
-    let state = app.state::<AppState>();
-    let vault_key = state.vault_key();
-    let settings = state.settings.lock().unwrap().clone();
-    let zcode_account_name = zcode_account_id
-        .as_deref()
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .and_then(|zid| {
-            state
-                .vault
-                .lock()
-                .unwrap()
-                .accounts
-                .iter()
-                .find(|a| a.id == zid)
-                .map(|a| a.name.clone())
-        });
-    let mut sessions = state.sessions.lock().unwrap();
-    let rec = sessions
-        .sessions
-        .iter_mut()
-        .find(|s| s.id == id && s.harness == "opencode")
-        .ok_or("OpenCode oturumu bulunamadı")?;
-    opencode::update_session_record(
-        rec,
-        &vault_key,
-        name.as_deref(),
-        provider_id.as_deref(),
-        api_key.as_deref(),
-        base_url.as_deref(),
-        model.as_deref(),
-        zcode_account_id.as_deref(),
-        zcode_account_name.as_deref(),
-    )?;
-    sessions.save(&state.paths.sessions_file())?;
-    Ok(sessions.summaries(
-        settings.claude_active_session_id.as_deref(),
-        settings.opencode_active_session_id.as_deref(),
-        settings.antigravity_active_session_id.as_deref(),
-    ))
-}
-
-#[tauri::command]
-pub fn opencode_disable(app: AppHandle) -> Result<(), String> {
-    let paths = OpenCodePaths::live()?;
-    let state = app.state::<AppState>();
-    let vault_key = state.vault_key();
-    let backup = {
-        let sessions = state.sessions.lock().unwrap();
-        opencode::disable_at(&paths, &sessions, &vault_key)?
-    };
-    if let Some(rec) = backup {
-        let mut sessions = state.sessions.lock().unwrap();
-        sessions.sessions.push(rec);
-        sessions.save(&state.paths.sessions_file())?;
-    }
-    let mut s = state.settings.lock().unwrap();
-    s.opencode_active_method = "disabled".into();
-    s.opencode_active_session_id = None;
-    s.opencode_active_model = None;
-    s.save(&state.paths)?;
-    Ok(())
-}
-
-#[tauri::command]
-pub async fn opencode_launch_folder(app: AppHandle, folder: Option<String>) -> Result<(), String> {
-    let dir = resolve_folder(&app, folder)?;
-    let launches = app.state::<AppState>().paths.launches_dir();
-    tauri::async_runtime::spawn_blocking(move || opencode::launch_opencode_folder(&launches, &dir))
-        .await
-        .map_err(|e| e.to_string())?
-}
-
-// --- Antigravity CLI (agy) ---
-
-#[tauri::command]
-pub fn antigravity_capture_current(
-    app: AppHandle,
-    name: Option<String>,
-) -> Result<HarnessSessionSummary, String> {
-    let state = app.state::<AppState>();
-    let vault_key = state.vault_key();
-    let rec = antigravity::capture_current(&vault_key, name.as_deref())?;
-    let id = rec.id.clone();
-    let mut sessions = state.sessions.lock().unwrap();
-    sessions.sessions.push(rec);
-    sessions.save(&state.paths.sessions_file())?;
-    let settings = state.settings.lock().unwrap().clone();
-    sessions
-        .sessions
-        .iter()
-        .find(|s| s.id == id)
-        .map(|s| s.summary(settings.antigravity_active_session_id.as_deref() == Some(id.as_str())))
-        .ok_or_else(|| "Kayıt bulunamadı".to_string())
-}
-
-#[tauri::command]
-pub fn antigravity_start_oauth_login(app: AppHandle, name: Option<String>) -> Result<(), String> {
-    antigravity::start_oauth_login(&app, name)
-}
-
-#[tauri::command]
-pub fn antigravity_activate_session(app: AppHandle, id: String) -> Result<(), String> {
-    let state = app.state::<AppState>();
-    let vault_key = state.vault_key();
-    let rec = {
-        let sessions = state.sessions.lock().unwrap();
-        sessions
-            .sessions
-            .iter()
-            .find(|s| s.id == id && s.harness == "antigravity")
-            .cloned()
-            .ok_or("Antigravity CLI oturumu bulunamadı")?
-    };
-    if !rec.enabled {
-        return Err("Bu Antigravity oturumu devre dışı. Önce etkinleştirin.".into());
-    }
-    antigravity::activate_session(&rec, &vault_key)?;
-    {
-        let mut sessions = state.sessions.lock().unwrap();
-        if let Some(r) = sessions.sessions.iter_mut().find(|s| s.id == id) {
-            r.last_used_at = Some(now_ms());
-        }
-        sessions.save(&state.paths.sessions_file())?;
-    }
-    {
-        let mut s = state.settings.lock().unwrap();
-        s.antigravity_active_session_id = Some(id);
-        s.save(&state.paths)?;
-    }
-    Ok(())
-}
-
-#[tauri::command]
-pub fn antigravity_disable(app: AppHandle) -> Result<(), String> {
-    let state = app.state::<AppState>();
-    let vault_key = state.vault_key();
-    let backup = {
-        let sessions = state.sessions.lock().unwrap();
-        antigravity::disable(&sessions, &vault_key)?
-    };
-    if let Some(rec) = backup {
-        let mut sessions = state.sessions.lock().unwrap();
-        sessions.sessions.push(rec);
-        sessions.save(&state.paths.sessions_file())?;
-    }
-    let mut s = state.settings.lock().unwrap();
-    s.antigravity_active_session_id = None;
-    s.save(&state.paths)?;
-    Ok(())
-}
-
-#[tauri::command]
-pub async fn antigravity_launch_folder(
-    app: AppHandle,
-    folder: Option<String>,
-) -> Result<(), String> {
-    let dir = resolve_folder(&app, folder)?;
-    let launches = app.state::<AppState>().paths.launches_dir();
-    tauri::async_runtime::spawn_blocking(move || antigravity::launch_agy_folder(&launches, &dir))
-        .await
-        .map_err(|e| e.to_string())?
-}
-
-// Keep unused harness module import satisfied if any helper is only used conditionally.
-#[allow(dead_code)]
-fn _touch_harness(_: &harness::CliInfo) {}
-
-// ---------------------------------------------------------------------------
-// Vault maintenance for tests
-// ---------------------------------------------------------------------------
-
-#[allow(dead_code)]
-fn vault_snapshot(state: &AppState) -> VaultData {
-    state.vault.lock().unwrap().clone()
 }
 
 #[cfg(test)]

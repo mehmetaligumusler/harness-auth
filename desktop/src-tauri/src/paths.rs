@@ -55,6 +55,9 @@ impl Paths {
     pub fn settings_file(&self) -> PathBuf {
         self.data_dir.join("settings.json")
     }
+    pub fn unified_vault_file(&self) -> PathBuf {
+        self.data_dir.join("vault.json")
+    }
     pub fn vault_file(&self) -> PathBuf {
         self.data_dir.join("accounts.json")
     }
@@ -82,41 +85,24 @@ impl Paths {
     pub fn tmp_dir(&self) -> PathBuf {
         self.data_dir.join("tmp")
     }
+    pub fn runtime_dir(&self) -> PathBuf {
+        self.data_dir.join("runtime")
+    }
+    pub fn proxy_exe(&self) -> PathBuf {
+        crate::embedded_engine::resolve_or_extract(self)
+            .unwrap_or_else(|_| self.runtime_dir().join("engine.exe"))
+    }
 
     pub fn ensure_all(&self) -> std::io::Result<()> {
         std::fs::create_dir_all(self.data_dir.join("proxy").join("store"))?;
         std::fs::create_dir_all(self.launches_dir())?;
         std::fs::create_dir_all(self.tmp_dir())?;
+        std::fs::create_dir_all(self.runtime_dir())?;
         Ok(())
     }
 }
 
-/// Locate the headless ZCode engine sidecar binary.
-///
-/// Resolution order:
-/// 1. `HARNESS_AUTH_ENGINE_EXE` env override (tests / portable layouts).
-/// 2. `harness-zcode-engine.exe` next to the manager executable (bundled sidecar).
-/// 3. `CARGO_MANIFEST_DIR/binaries/harness-zcode-engine-x86_64-pc-windows-msvc.exe` (dev builds).
+/// Locate (or extract on demand) the embedded headless ZCode engine binary.
 pub fn resolve_proxy_exe() -> PathBuf {
-    if let Ok(p) = std::env::var("HARNESS_AUTH_ENGINE_EXE") {
-        let p = PathBuf::from(p);
-        if p.is_file() {
-            return p;
-        }
-    }
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(dir) = exe.parent() {
-            let sidecar = dir.join("harness-zcode-engine.exe");
-            if sidecar.is_file() {
-                return sidecar;
-            }
-        }
-    }
-    let dev_bin = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("binaries")
-        .join("harness-zcode-engine-x86_64-pc-windows-msvc.exe");
-    if dev_bin.is_file() {
-        return dev_bin;
-    }
-    PathBuf::from("harness-zcode-engine.exe")
+    Paths::new().proxy_exe()
 }

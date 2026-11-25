@@ -6,7 +6,8 @@ use std::sync::Mutex;
 use tauri::{Manager, RunEvent, WindowEvent};
 
 use harness_auth::{
-    commands, crypto, harness, oauth, paths, proxy, secret, settings, state::AppState, tray, vault,
+    commands, crypto, harness::openai_bridge::OpenAiBridgeState, oauth, paths, proxy, secret,
+    settings, state::AppState, tray, unified_vault::UnifiedVault,
 };
 
 fn main() {
@@ -37,15 +38,36 @@ fn main() {
             commands::get_app_state,
             commands::save_settings,
             commands::reset_panel_identity,
-            commands::add_api_key_account,
-            commands::update_account,
+            commands::get_versions,
+            commands::push_recent_folder,
+            // Centralized Vault
+            commands::add_z_api_account,
+            commands::add_custom_provider,
+            commands::update_unified_account,
             commands::set_account_enabled,
-            commands::deactivate_account,
             commands::delete_account,
-            commands::activate_account,
+            commands::get_account_secret,
             commands::test_account,
+            commands::import_system_accounts,
+            // OAuth Capture / Browser Flows
             commands::start_oauth,
             commands::cancel_oauth,
+            commands::start_claude_oauth,
+            commands::capture_claude_oauth,
+            commands::start_agy_oauth,
+            commands::capture_agy_oauth,
+            commands::cancel_harness_oauth,
+            // Harnesses (Claude Code / OpenCode / ZCode / Antigravity)
+            commands::activate_for_harness,
+            commands::disable_harness,
+            commands::launch_harness,
+            commands::opencode_set_live_model,
+            commands::opencode_upsert_live_provider,
+            commands::opencode_remove_live_provider,
+            commands::opencode_toggle_account,
+            commands::opencode_set_default_account,
+            // ZCode Proxy Service
+            commands::activate_account,
             commands::proxy_start,
             commands::proxy_stop,
             commands::proxy_restart,
@@ -55,40 +77,9 @@ fn main() {
             commands::fetch_quota,
             commands::fetch_logs,
             commands::read_error_logs,
-            commands::list_models,
-            commands::save_model_prefs,
-            commands::test_model,
             commands::get_config,
             commands::save_config,
-            commands::claude_detect,
-            commands::claude_launch,
-            commands::push_recent_folder,
-            commands::get_versions,
-            // Multi-harness session commands
-            commands::update_session,
-            commands::set_session_enabled,
-            commands::delete_session,
-            commands::cancel_harness_oauth,
-            commands::claude_capture_oauth,
-            commands::claude_start_oauth_login,
-            commands::claude_add_api_session,
-            commands::claude_edit_session,
-            commands::claude_set_method,
-            commands::claude_launch_folder,
-            commands::opencode_capture_current,
-            commands::opencode_add_api_session,
-            commands::opencode_add_zcode_session,
-            commands::opencode_start_oauth_login,
-            commands::opencode_activate_session,
-            commands::opencode_set_method,
-            commands::opencode_edit_session,
-            commands::opencode_disable,
-            commands::opencode_launch_folder,
-            commands::antigravity_capture_current,
-            commands::antigravity_start_oauth_login,
-            commands::antigravity_activate_session,
-            commands::antigravity_disable,
-            commands::antigravity_launch_folder,
+            commands::test_model,
         ])
         .setup(|app| {
             let handle = app.handle();
@@ -97,7 +88,6 @@ fn main() {
                 eprintln!("tray init failed: {e}");
             }
 
-            // Adopt a proxy left behind by a previous session.
             {
                 let state = handle.state::<AppState>();
                 let settings = state.settings.lock().unwrap().clone();
@@ -106,7 +96,6 @@ fn main() {
                 }
             }
 
-            // Hidden start (autostart with --hidden, or startMinimized).
             let start_hidden = std::env::args().any(|a| a == "--hidden")
                 || handle
                     .state::<AppState>()
@@ -120,11 +109,15 @@ fn main() {
                 }
             }
 
-            // Optional proxy autostart (needs an active account).
             {
                 let state = handle.state::<AppState>();
                 let autostart = state.settings.lock().unwrap().proxy_autostart;
-                let has_account = state.vault.lock().unwrap().active().is_some();
+                let has_account = state
+                    .vault
+                    .lock()
+                    .unwrap()
+                    .first_enabled_zcode_service()
+                    .is_some();
                 if autostart && has_account {
                     let handle = handle.clone();
                     tauri::async_runtime::spawn(async move {
@@ -163,19 +156,17 @@ fn init_state() -> AppState {
     if let Err(e) = paths.ensure_all() {
         eprintln!("data dirs unavailable: {e}");
     }
-    let settings = settings::Settings::load(&paths);
+    let mut settings = settings::Settings::load(&paths);
     let secret = secret::load_or_create().unwrap_or_else(|e| {
         eprintln!("master secret unavailable ({e}); vault disabled until fixed");
         String::new()
     });
     let vault_key = crypto::derive_vault_key(&secret);
-    let vault = if paths.vault_file().exists() {
-        vault::VaultData::load(&paths.vault_file())
-    } else {
-        vault::migrate_legacy_accounts(&paths.vault_file(), &vault_key)
-            .unwrap_or_else(|| vault::VaultData::load(&paths.vault_file()))
-    };
-    let sessions = harness::SessionVault::load(&paths.sessions_file());
+    let (vault, settings_changed) =
+        UnifiedVault::load_or_migrate(&paths, &vault_key, &mut settings);
+    if settings_changed {
+        let _ = settings.save(&paths);
+    }
     if let Err(e) = proxy::ensure_proxy_config(&paths) {
         eprintln!("proxy config init failed: {e}");
     }
@@ -183,10 +174,10 @@ fn init_state() -> AppState {
         settings: Mutex::new(settings),
         secret,
         vault: Mutex::new(vault),
-        sessions: Mutex::new(sessions),
         proxy: Mutex::default(),
         oauth: Mutex::default(),
         harness_oauth: Mutex::default(),
+        openai_bridge: OpenAiBridgeState::default(),
         paths,
     }
 }

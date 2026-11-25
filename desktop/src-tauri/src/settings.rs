@@ -32,9 +32,11 @@ pub struct Settings {
     pub recent_models: Vec<String>,
     pub log_level: String, // "info" | "debug"
     pub update_check: bool,
-    // Multi-harness active tracking
+    // Multi-harness active tracking (legacy + unified)
+    #[serde(default)]
+    pub zcode_service_account_id: Option<String>,
     #[serde(default = "default_claude_method")]
-    pub claude_active_method: String, // "claude_oauth" | "zcode_oauth" | "z_api" | "disabled"
+    pub claude_active_method: String, // "claude_oauth" | "zcode_oauth" | "z_api" | "custom_provider" | "disabled"
     #[serde(default)]
     pub claude_active_session_id: Option<String>,
     #[serde(default)]
@@ -42,9 +44,13 @@ pub struct Settings {
     #[serde(default)]
     pub opencode_active_session_id: Option<String>,
     #[serde(default = "default_claude_method")]
-    pub opencode_active_method: String, // "profile" | "zcode_oauth" | "z_api" | "disabled"
+    pub opencode_active_method: String, // "zcode_oauth" | "z_api" | "custom_provider" | "disabled"
     #[serde(default)]
     pub opencode_active_model: Option<String>,
+    #[serde(default)]
+    pub zcode_app_active_account_id: Option<String>,
+    #[serde(default = "default_claude_method")]
+    pub zcode_app_active_method: String, // "zcode_oauth" | "z_api" | "disabled"
     #[serde(default)]
     pub antigravity_active_session_id: Option<String>,
 }
@@ -69,12 +75,15 @@ impl Default for Settings {
             recent_models: Vec::new(),
             log_level: "info".into(),
             update_check: true,
+            zcode_service_account_id: None,
             claude_active_method: default_claude_method(),
             claude_active_session_id: None,
             claude_active_model: None,
             opencode_active_session_id: None,
             opencode_active_method: default_claude_method(),
             opencode_active_model: None,
+            zcode_app_active_account_id: None,
+            zcode_app_active_method: default_claude_method(),
             antigravity_active_session_id: None,
         }
     }

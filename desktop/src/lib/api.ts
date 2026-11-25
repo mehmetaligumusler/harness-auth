@@ -1,179 +1,148 @@
-// Typed wrappers around Tauri invoke calls.
+// Typed wrapper around Tauri `invoke` for HarnessAuth v2.
 
 import { invoke } from "@tauri-apps/api/core";
 import type {
-  AccountSummary,
   AppStateDto,
-  ClaudeMethod,
   ConfigSaveResult,
-  HarnessSessionSummary,
+  CustomModelDef,
+  HarnessId,
+  ImportResultDto,
   LogsPage,
-  ModelsInfo,
-  OpenCodeMethod,
-  PlanId,
   ProxyConfig,
   ProxyStatusDto,
   QuotaSnapshot,
   Settings,
   TestResult,
-} from "./types";
+  UnifiedAccountSummary,
+  Versions,
+} from "@/lib/types";
 
 export const api = {
   getAppState: () => invoke<AppStateDto>("get_app_state"),
-  saveSettings: (settings: Settings) =>
-    invoke<Settings>("save_settings", { newSettings: settings }),
+  saveSettings: (newSettings: Settings) =>
+    invoke<Settings>("save_settings", { newSettings }),
+  resetPanelIdentity: () => invoke<void>("reset_panel_identity"),
+  getVersions: () => invoke<Versions>("get_versions"),
+  pushRecentFolder: (folder: string) =>
+    invoke<void>("push_recent_folder", { folder }),
 
-  // ZCode accounts
-  addApiKeyAccount: (p: {
+  // Centralized Unified Vault
+  addZApiAccount: (p: {
     name: string;
     provider: string;
     apiKey: string;
-    defaultPlan?: string;
     defaultModel?: string;
     baseUrl?: string;
-  }) => invoke<AccountSummary[]>("add_api_key_account", p),
-  updateAccount: (p: {
+  }) => invoke<UnifiedAccountSummary[]>("add_z_api_account", p),
+
+  addCustomProvider: (p: {
+    name: string;
+    providerSlug: string;
+    package: string;
+    baseUrl: string;
+    apiKey: string;
+    defaultModel?: string;
+    models: CustomModelDef[];
+    syncToOpencode: boolean;
+  }) => invoke<UnifiedAccountSummary[]>("add_custom_provider", p),
+
+  updateUnifiedAccount: (p: {
     id: string;
     name?: string;
+    providerSlug?: string;
+    package?: string;
+    baseUrl?: string;
+    apiKey?: string;
     defaultPlan?: string;
     defaultModel?: string;
-    baseUrl?: string;
-  }) => invoke<AccountSummary[]>("update_account", p),
-  setAccountEnabled: (id: string, enabled: boolean) =>
-    invoke<AccountSummary[]>("set_account_enabled", { id, enabled }),
-  deactivateAccount: () => invoke<ProxyStatusDto>("deactivate_account"),
-  deleteAccount: (id: string) => invoke<unknown>("delete_account", { id }),
-  activateAccount: (id: string) => invoke<ProxyStatusDto>("activate_account", { id }),
-  testAccount: (id: string) => invoke<TestResult>("test_account", { id }),
+    models?: CustomModelDef[];
+  }) => invoke<UnifiedAccountSummary[]>("update_unified_account", p),
 
+  setAccountEnabled: (id: string, enabled: boolean) =>
+    invoke<UnifiedAccountSummary[]>("set_account_enabled", { id, enabled }),
+  deleteAccount: (id: string) =>
+    invoke<UnifiedAccountSummary[]>("delete_account", { id }),
+  getAccountSecret: (id: string) =>
+    invoke<string>("get_account_secret", { id }),
+  testAccount: (id: string) =>
+    invoke<TestResult>("test_account", { id }),
+  importSystemAccounts: () =>
+    invoke<ImportResultDto>("import_system_accounts"),
+
+  // OAuth Capture & Browser Login
   startOAuth: (provider: string, name?: string) =>
     invoke<void>("start_oauth", { provider, name }),
   cancelOAuth: () => invoke<void>("cancel_oauth"),
+  startClaudeOAuth: (name?: string) =>
+    invoke<void>("start_claude_oauth", { name }),
+  captureClaudeOAuth: (name?: string) =>
+    invoke<UnifiedAccountSummary>("capture_claude_oauth", { name }),
+  startAgyOAuth: (name?: string) =>
+    invoke<void>("start_agy_oauth", { name }),
+  captureAgyOAuth: (name?: string) =>
+    invoke<UnifiedAccountSummary>("capture_agy_oauth", { name }),
+  cancelHarnessOAuth: () => invoke<void>("cancel_harness_oauth"),
 
-  // Proxy engine
+  // One-click Harness Switching & Launch
+  activateForHarness: (p: {
+    harness: HarnessId;
+    accountId: string;
+    model?: string;
+  }) => invoke<void>("activate_for_harness", p),
+  disableHarness: (harness: HarnessId) =>
+    invoke<void>("disable_harness", { harness }),
+  launchHarness: (harness: HarnessId, folder?: string) =>
+    invoke<void>("launch_harness", { harness, folder }),
+
+  // OpenCode live `opencode.jsonc` provider/model controls
+  opencodeSetLiveModel: (modelRef: string) =>
+    invoke<void>("opencode_set_live_model", { modelRef }),
+  opencodeUpsertLiveProvider: (p: {
+    slug: string;
+    package: string;
+    name: string;
+    baseUrl: string;
+    apiKey: string;
+    models: CustomModelDef[];
+    setDefaultModel?: string;
+  }) => invoke<void>("opencode_upsert_live_provider", p),
+  opencodeRemoveLiveProvider: (slug: string) =>
+    invoke<void>("opencode_remove_live_provider", { slug }),
+  opencodeToggleAccount: (p: {
+    accountId: string;
+    enabled: boolean;
+    model?: string;
+  }) => invoke<void>("opencode_toggle_account", p),
+  opencodeSetDefaultAccount: (p: {
+    accountId: string;
+    model?: string;
+  }) => invoke<void>("opencode_set_default_account", p),
+
+  // ZCode Background Proxy Service
+  activateAccount: (id: string) =>
+    invoke<ProxyStatusDto>("activate_account", { id }),
   proxyStart: () => invoke<ProxyStatusDto>("proxy_start"),
   proxyStop: () => invoke<ProxyStatusDto>("proxy_stop"),
   proxyRestart: () => invoke<ProxyStatusDto>("proxy_restart"),
   proxyKill: () => invoke<ProxyStatusDto>("proxy_kill"),
   proxyStatus: () => invoke<ProxyStatusDto>("proxy_status"),
   proxyTest: () =>
-    invoke<{ ok: boolean; health: boolean; modelsCount: number; message: string }>("proxy_test"),
-
+    invoke<{ ok: boolean; message: string; modelsCount?: number }>("proxy_test"),
   fetchQuota: () => invoke<QuotaSnapshot>("fetch_quota"),
   fetchLogs: (since: number) => invoke<LogsPage>("fetch_logs", { since }),
-  readErrorLogs: (limit: number) =>
+  readErrorLogs: (limit = 200) =>
     invoke<Array<Record<string, unknown>>>("read_error_logs", { limit }),
-
-  listModels: () => invoke<ModelsInfo>("list_models"),
-  saveModelPrefs: (p: {
-    defaultModel?: string;
-    customModels?: string[];
-    recentModel?: string;
-  }) => invoke<void>("save_model_prefs", p),
-  testModel: (model: string) => invoke<TestResult>("test_model", { model }),
-
   getConfig: () => invoke<ProxyConfig>("get_config"),
   saveConfig: (updates: {
     port?: number;
     host?: string;
     proxyApiKey?: string;
     provider?: string;
-    plan?: PlanId;
+    plan?: string;
     planAutoSwitch?: boolean;
-    planPriority?: PlanId[];
+    planPriority?: string[];
     defaultModel?: string;
     models?: string[];
   }) => invoke<ConfigSaveResult>("save_config", { updates }),
-
-  claudeDetect: () =>
-    invoke<{ found: boolean; version: string | null; path: string | null }>("claude_detect"),
-  claudeLaunch: (p: { mode: "proxy" | "normal"; model?: string; folder?: string }) =>
-    invoke<void>("claude_launch", p),
-  pushRecentFolder: (folder: string) => invoke<void>("push_recent_folder", { folder }),
-  getVersions: () => invoke<{ app: string; proxy: string | null }>("get_versions"),
-
-  // Multi-harness sessions
-  updateSession: (id: string, name: string) =>
-    invoke<HarnessSessionSummary[]>("update_session", { id, name }),
-  setSessionEnabled: (id: string, enabled: boolean) =>
-    invoke<HarnessSessionSummary[]>("set_session_enabled", { id, enabled }),
-  deleteSession: (id: string) => invoke<unknown>("delete_session", { id }),
-  cancelHarnessOAuth: () => invoke<void>("cancel_harness_oauth"),
-
-  // Claude Code
-  claudeCaptureOAuth: (name?: string) =>
-    invoke<HarnessSessionSummary>("claude_capture_oauth", { name }),
-  claudeStartOAuthLogin: (name?: string) =>
-    invoke<void>("claude_start_oauth_login", { name }),
-  claudeAddApiSession: (p: {
-    name: string;
-    providerId: string;
-    apiKey: string;
-    baseUrl?: string;
-    model?: string;
-  }) => invoke<HarnessSessionSummary>("claude_add_api_session", p),
-  claudeEditSession: (p: {
-    id: string;
-    name?: string;
-    providerId?: string;
-    apiKey?: string;
-    baseUrl?: string;
-    model?: string;
-  }) => invoke<HarnessSessionSummary[]>("claude_edit_session", p),
-  claudeSetMethod: (p: {
-    method: ClaudeMethod;
-    targetId?: string;
-    model?: string;
-    clearOauthCredentials?: boolean;
-  }) => invoke<void>("claude_set_method", p),
-  claudeLaunchFolder: (folder?: string) =>
-    invoke<void>("claude_launch_folder", { folder }),
-
-  // OpenCode
-  opencodeCaptureCurrent: (name?: string) =>
-    invoke<HarnessSessionSummary>("opencode_capture_current", { name }),
-  opencodeAddApiSession: (p: {
-    name: string;
-    providerId: string;
-    apiKey: string;
-    baseUrl?: string;
-    model?: string;
-  }) => invoke<HarnessSessionSummary>("opencode_add_api_session", p),
-  opencodeAddZcodeSession: (p: {
-    name: string;
-    zcodeAccountId: string;
-    model?: string;
-  }) => invoke<HarnessSessionSummary>("opencode_add_zcode_session", p),
-  opencodeStartOAuthLogin: (name?: string) =>
-    invoke<void>("opencode_start_oauth_login", { name }),
-  opencodeActivateSession: (id: string) =>
-    invoke<void>("opencode_activate_session", { id }),
-  opencodeSetMethod: (p: {
-    method: OpenCodeMethod;
-    targetId?: string;
-    model?: string;
-  }) => invoke<void>("opencode_set_method", p),
-  opencodeEditSession: (p: {
-    id: string;
-    name?: string;
-    providerId?: string;
-    apiKey?: string;
-    baseUrl?: string;
-    model?: string;
-    zcodeAccountId?: string;
-  }) => invoke<HarnessSessionSummary[]>("opencode_edit_session", p),
-  opencodeDisable: () => invoke<void>("opencode_disable"),
-  opencodeLaunchFolder: (folder?: string) =>
-    invoke<void>("opencode_launch_folder", { folder }),
-
-  // Antigravity CLI (agy)
-  antigravityCaptureCurrent: (name?: string) =>
-    invoke<HarnessSessionSummary>("antigravity_capture_current", { name }),
-  antigravityStartOAuthLogin: (name?: string) =>
-    invoke<void>("antigravity_start_oauth_login", { name }),
-  antigravityActivateSession: (id: string) =>
-    invoke<void>("antigravity_activate_session", { id }),
-  antigravityDisable: () => invoke<void>("antigravity_disable"),
-  antigravityLaunchFolder: (folder?: string) =>
-    invoke<void>("antigravity_launch_folder", { folder }),
+  testModel: (model: string) => invoke<TestResult>("test_model", { model }),
 };

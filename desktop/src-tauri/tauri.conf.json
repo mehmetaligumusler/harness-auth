@@ -33,7 +33,6 @@
     "shortDescription": "HarnessAuth",
     "longDescription": "Windows desktop session manager for Claude Code, OpenCode, Antigravity CLI and ZCode.",
     "icon": ["icons/icon.ico", "icons/32x32.png", "icons/128x128.png", "icons/128x128@2x.png"],
-    "externalBin": ["binaries/harness-zcode-engine"],
     "windows": {
       "nsis": {
         "installMode": "currentUser",

@@ -37,6 +37,10 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: "1.4.0"
+
       - uses: pnpm/action-setup@v4
         with:
           version: 10
@@ -49,8 +53,11 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
 
-      - name: Install desktop dependencies
-        run: pnpm --dir desktop install --frozen-lockfile
+      - name: Install dependencies & build embedded engine
+        run: |
+          bun install --frozen-lockfile
+          bun run build:sidecar
+          pnpm --dir desktop install --frozen-lockfile
 
       - name: Build desktop frontend
         run: pnpm --dir desktop build

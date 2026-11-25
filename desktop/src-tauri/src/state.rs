@@ -2,23 +2,24 @@
 
 use std::sync::Mutex;
 
-use crate::harness::{HarnessOAuthState, SessionVault};
+use crate::harness::openai_bridge::OpenAiBridgeState;
+use crate::harness::HarnessOAuthState;
 use crate::oauth::OAuthState;
 use crate::paths::Paths;
 use crate::proxy::ManagedProxy;
 use crate::settings::Settings;
-use crate::vault::VaultData;
+use crate::unified_vault::UnifiedVault;
 
 pub struct AppState {
     pub paths: Paths,
     /// Master secret (Windows Credential Manager-backed).
     pub secret: String,
     pub settings: Mutex<Settings>,
-    pub vault: Mutex<VaultData>,
-    pub sessions: Mutex<SessionVault>,
+    pub vault: Mutex<UnifiedVault>,
     pub proxy: Mutex<ManagedProxy>,
     pub oauth: Mutex<OAuthState>,
     pub harness_oauth: Mutex<HarnessOAuthState>,
+    pub openai_bridge: OpenAiBridgeState,
 }
 
 impl AppState {

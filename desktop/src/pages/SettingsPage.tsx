@@ -1,5 +1,5 @@
 import * as React from "react";
-import { FolderOpen } from "lucide-react";
+import { FolderOpen, RotateCcw } from "lucide-react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { toast } from "sonner";
 import {
@@ -12,8 +12,14 @@ import {
   Label,
   Select,
   Switch,
+  Tabs,
+  TabsContent,
+  TabsList,
+  TabsTrigger,
 } from "@/components/ui";
-import { KeyValue, PageHeader, SectionTitle } from "@/components/common";
+import { ConfirmDialog, KeyValue, PageHeader, SectionTitle } from "@/components/common";
+import { ZCodeServicePanel } from "@/components/ZCodeServicePanel";
+import { api } from "@/lib/api";
 import { useApp, useT } from "@/stores/app";
 import type { Settings as SettingsType } from "@/lib/types";
 
@@ -23,7 +29,9 @@ export function SettingsPage() {
   const saveSettings = useApp((s) => s.saveSettings);
   const busy = useApp((s) => !!s.busy["settings"]);
 
+  const [tab, setTab] = React.useState<"general" | "zcode">("general");
   const [draft, setDraft] = React.useState<SettingsType | null>(null);
+  const [confirmReset, setConfirmReset] = React.useState(false);
 
   React.useEffect(() => {
     if (state?.settings && !draft) setDraft({ ...state.settings });
@@ -36,10 +44,6 @@ export function SettingsPage() {
   const set = <K extends keyof SettingsType>(key: K, value: SettingsType[K]) =>
     setDraft((d) => (d ? { ...d, [key]: value } : d));
 
-  const save = async () => {
-    await saveSettings(draft);
-  };
-
   const pickDefaultFolder = async () => {
     try {
       const picked = await open({ directory: true, multiple: false });
@@ -49,232 +53,175 @@ export function SettingsPage() {
     }
   };
 
-  const Toggle = ({
-    labelKey,
-    checked,
-    onChange,
-  }: {
-    labelKey: Parameters<ReturnType<typeof useT>>[0];
-    checked: boolean;
-    onChange: (v: boolean) => void;
-  }) => (
-    <div className="flex items-center justify-between py-2">
-      <Label className="text-sm font-normal text-muted-foreground">{t(labelKey)}</Label>
-      <Switch checked={checked} onCheckedChange={onChange} />
-    </div>
-  );
-
   return (
     <>
       <PageHeader
         title={t("settingsTitle")}
         subtitle={t("settingsSubtitle")}
         actions={
-          <Button size="sm" disabled={busy} onClick={() => void save()}>
+          <Button size="sm" disabled={busy} onClick={() => void saveSettings(draft)}>
             {t("save")}
           </Button>
         }
       />
 
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-        {/* General */}
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-base">{t("settingsGeneral")}</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <div className="space-y-1.5">
-              <Label htmlFor="set-theme">{t("theme")}</Label>
-              <Select
-                id="set-theme"
-                value={draft.theme}
-                onChange={(e) => set("theme", e.target.value as SettingsType["theme"])}
-              >
-                <option value="dark">{t("themeDark")}</option>
-                <option value="light">{t("themeLight")}</option>
-              </Select>
-            </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="set-lang">{t("language")}</Label>
-              <Select
-                id="set-lang"
-                value={draft.language}
-                onChange={(e) => set("language", e.target.value as SettingsType["language"])}
-              >
-                <option value="tr">Türkçe</option>
-                <option value="en">English</option>
-              </Select>
-            </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="set-log">{t("logLevel")}</Label>
-              <Select
-                id="set-log"
-                value={draft.logLevel}
-                onChange={(e) => set("logLevel", e.target.value)}
-              >
-                <option value="info">info</option>
-                <option value="debug">debug</option>
-              </Select>
-            </div>
-            <Toggle
-              labelKey="updateCheck"
-              checked={draft.updateCheck}
-              onChange={(v) => set("updateCheck", v)}
-            />
-          </CardContent>
-        </Card>
+      <Tabs value={tab} onValueChange={(v) => setTab(v as "general" | "zcode")}>
+        <TabsList>
+          <TabsTrigger value="general">Genel & Sistem</TabsTrigger>
+          <TabsTrigger value="zcode">ZCode Proxy & Kota</TabsTrigger>
+        </TabsList>
 
-        {/* Defaults */}
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-base">{t("settingsDefaults")}</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <div className="space-y-1.5">
-              <Label htmlFor="set-provider">{t("defaultProvider")}</Label>
-              <Select
-                id="set-provider"
-                value={draft.defaultProvider}
-                onChange={(e) =>
-                  set("defaultProvider", e.target.value as SettingsType["defaultProvider"])
-                }
-              >
-                <option value="zai">Z.AI</option>
-                <option value="bigmodel">BigModel</option>
-              </Select>
-            </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="set-plan">{t("defaultPlanLabel")}</Label>
-              <Select
-                id="set-plan"
-                value={draft.defaultPlan}
-                onChange={(e) => set("defaultPlan", e.target.value as SettingsType["defaultPlan"])}
-              >
-                <option value="coding-plan">{t("planCoding")}</option>
-                <option value="start-plan">{t("planStart")}</option>
-              </Select>
-            </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="set-model">{t("defaultModelLabel")}</Label>
-              <Input
-                id="set-model"
-                className="font-mono"
-                value={draft.defaultModel}
-                onChange={(e) => set("defaultModel", e.target.value)}
-              />
-            </div>
-            <div className="space-y-1.5">
-              <Label>{t("claudeDefaultFolderLabel")}</Label>
-              <div className="flex gap-2">
-                <Input
-                  value={draft.claudeDefaultFolder ?? ""}
-                  onChange={(e) => set("claudeDefaultFolder", e.target.value)}
-                  className="font-mono"
-                  placeholder="C:\\Projects"
+        <TabsContent value="general">
+          <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+            {/* General */}
+            <Card>
+              <CardHeader className="pb-2">
+                <CardTitle className="text-base">{t("settingsGeneral")}</CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="space-y-1.5">
+                  <Label htmlFor="set-theme">{t("theme")}</Label>
+                  <Select
+                    id="set-theme"
+                    value={draft.theme}
+                    onChange={(e) => set("theme", e.target.value as SettingsType["theme"])}
+                  >
+                    <option value="dark">{t("themeDark")}</option>
+                    <option value="light">{t("themeLight")}</option>
+                  </Select>
+                </div>
+                <div className="space-y-1.5">
+                  <Label htmlFor="set-lang">{t("language")}</Label>
+                  <Select
+                    id="set-lang"
+                    value={draft.language}
+                    onChange={(e) =>
+                      set("language", e.target.value as SettingsType["language"])
+                    }
+                  >
+                    <option value="tr">Türkçe</option>
+                    <option value="en">English</option>
+                  </Select>
+                </div>
+                <div className="space-y-1.5">
+                  <Label>{t("defaultClaudeFolder")}</Label>
+                  <div className="flex gap-2">
+                    <Input
+                      value={draft.claudeDefaultFolder ?? ""}
+                      onChange={(e) => set("claudeDefaultFolder", e.target.value)}
+                      className="font-mono text-xs"
+                      placeholder="C:\\Projects"
+                    />
+                    <Button variant="outline" onClick={() => void pickDefaultFolder()}>
+                      <FolderOpen className="h-4 w-4" />
+                    </Button>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+
+            {/* System & Tray */}
+            <Card>
+              <CardHeader className="pb-2">
+                <CardTitle className="text-base">{t("settingsSystem")}</CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-2">
+                <div className="flex items-center justify-between py-1.5">
+                  <Label className="font-normal text-muted-foreground">
+                    {t("autostartWindows")}
+                  </Label>
+                  <Switch
+                    checked={draft.autostartWindows}
+                    onCheckedChange={(v) => set("autostartWindows", v)}
+                  />
+                </div>
+                <div className="flex items-center justify-between py-1.5">
+                  <Label className="font-normal text-muted-foreground">
+                    {t("startMinimized")}
+                  </Label>
+                  <Switch
+                    checked={draft.startMinimized}
+                    onCheckedChange={(v) => set("startMinimized", v)}
+                  />
+                </div>
+                <div className="flex items-center justify-between py-1.5">
+                  <Label className="font-normal text-muted-foreground">
+                    {t("closeToTray")}
+                  </Label>
+                  <Switch
+                    checked={draft.closeToTray}
+                    onCheckedChange={(v) => set("closeToTray", v)}
+                  />
+                </div>
+              </CardContent>
+            </Card>
+
+            {/* Paths & Versions */}
+            <Card className="lg:col-span-2">
+              <CardHeader className="pb-2">
+                <CardTitle className="text-base">{t("settingsAbout")}</CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-2">
+                <KeyValue label={t("appVersion")} value={state.versions.app} />
+                <KeyValue
+                  label={t("proxyVersion")}
+                  value={state.versions.proxy ?? t("unknown")}
                 />
-                <Button variant="outline" onClick={() => void pickDefaultFolder()}>
-                  <FolderOpen />
-                </Button>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-
-        {/* Proxy behavior */}
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-base">{t("settingsProxy")}</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <Toggle
-              labelKey="proxyAutoStart"
-              checked={draft.proxyAutostart}
-              onChange={(v) => set("proxyAutostart", v)}
-            />
-            <Toggle
-              labelKey="keepProxyOnExit"
-              checked={draft.keepProxyOnExit}
-              onChange={(v) => set("keepProxyOnExit", v)}
-            />
-          </CardContent>
-        </Card>
-
-        {/* Windows */}
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-base">{t("settingsWindows")}</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <Toggle
-              labelKey="runAtStartup"
-              checked={draft.autostartWindows}
-              onChange={(v) => set("autostartWindows", v)}
-            />
-            <Toggle
-              labelKey="minimizeToTray"
-              checked={draft.closeToTray}
-              onChange={(v) => set("closeToTray", v)}
-            />
-            <Toggle
-              labelKey="runInBackground"
-              checked={draft.keepProxyOnExit}
-              onChange={(v) => set("keepProxyOnExit", v)}
-            />
-            <Toggle
-              labelKey="startMinimizedLabel"
-              checked={draft.startMinimized}
-              onChange={(v) => set("startMinimized", v)}
-            />
-          </CardContent>
-        </Card>
-      </div>
-
-      {/* About */}
-      <Card className="mt-4">
-        <CardHeader className="pb-2">
-          <CardTitle className="text-base">{t("settingsAbout")}</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <KeyValue label={t("versionApp")} value={state.versions.app} />
-          <KeyValue label={t("versionProxy")} value={state.versions.proxy ?? t("unknown")} />
-          <div className="mt-2">
-            <SectionTitle>{t("openDataFolder")}</SectionTitle>
-            <code className="block break-all rounded-md border bg-muted/50 px-2 py-1.5 font-mono text-xs">
-              {state.paths.dataDir}
-            </code>
+                <SectionTitle>{t("vaultPath")}</SectionTitle>
+                <code className="block break-all rounded border bg-muted/40 px-2 py-1 font-mono text-[11px]">
+                  {state.paths.vault}
+                </code>
+                <SectionTitle>{t("dataDir")}</SectionTitle>
+                <code className="block break-all rounded border bg-muted/40 px-2 py-1 font-mono text-[11px]">
+                  {state.paths.dataDir}
+                </code>
+                <div className="flex flex-wrap gap-2 pt-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={async () => {
+                      try {
+                        const { revealItemInDir } = await import(
+                          "@tauri-apps/plugin-opener"
+                        );
+                        await revealItemInDir(state.paths.dataDir);
+                      } catch (e) {
+                        toast.error(String(e));
+                      }
+                    }}
+                  >
+                    {t("dataDir")}
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setConfirmReset(true)}
+                  >
+                    <RotateCcw className="h-3.5 w-3.5" />
+                    {t("resetPanelToken")}
+                  </Button>
+                </div>
+              </CardContent>
+            </Card>
           </div>
-          <div className="mt-3 flex gap-2">
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={async () => {
-                try {
-                  const { revealItemInDir } = await import("@tauri-apps/plugin-opener");
-                  await revealItemInDir(state.paths.config);
-                } catch (e) {
-                  toast.error(t("errGeneric"), { description: String(e) });
-                }
-              }}
-            >
-              {t("openConfigFile")}
-            </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={async () => {
-                try {
-                  const { revealItemInDir } = await import("@tauri-apps/plugin-opener");
-                  await revealItemInDir(state.paths.dataDir);
-                } catch (e) {
-                  toast.error(t("errGeneric"), { description: String(e) });
-                }
-              }}
-            >
-              {t("openDataFolder")}
-            </Button>
-          </div>
-        </CardContent>
-      </Card>
+        </TabsContent>
+
+        <TabsContent value="zcode">
+          <ZCodeServicePanel draft={draft} onDraftChange={set} />
+        </TabsContent>
+      </Tabs>
+
+      <ConfirmDialog
+        open={confirmReset}
+        onClose={() => setConfirmReset(false)}
+        onConfirm={async () => {
+          await api.resetPanelIdentity();
+          setConfirmReset(false);
+          toast.success(t("saved"));
+        }}
+        title={t("resetPanelToken")}
+        body={t("resetPanelTokenConfirm")}
+      />
     </>
   );
 }

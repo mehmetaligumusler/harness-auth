@@ -25,12 +25,9 @@ use harness_auth::yamlpatch;
 
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
-fn proxy_exe() -> PathBuf {
-    let p = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("binaries")
-        .join("harness-zcode-engine-x86_64-pc-windows-msvc.exe");
-    assert!(p.is_file(), "sidecar exe missing at {}", p.display());
-    p
+fn proxy_exe(paths: &Paths) -> PathBuf {
+    harness_auth::embedded_engine::resolve_or_extract(paths)
+        .expect("extract embedded zcode engine")
 }
 
 struct TempApp {
@@ -79,7 +76,7 @@ impl TempApp {
     }
 
     fn spawn(&self, cred_json: &str) -> ManagedProxy {
-        proxy::spawn_proxy(&proxy_exe(), &self.paths, &self.settings, &self.secret, cred_json)
+        proxy::spawn_proxy(&proxy_exe(&self.paths), &self.paths, &self.settings, &self.secret, cred_json)
             .expect("proxy spawn")
     }
 
@@ -244,7 +241,7 @@ fn real_account_e2e() {
     let app = TempApp::new("real");
 
     // Import the host ZCode credential through the proxy's own CLI.
-    let mut cmd = Command::new(proxy_exe());
+    let mut cmd = Command::new(proxy_exe(&app.paths));
     cmd.args(["--cli", "auth", "login", "zai", "--import"])
         .stdout(Stdio::null())
         .stderr(Stdio::null());

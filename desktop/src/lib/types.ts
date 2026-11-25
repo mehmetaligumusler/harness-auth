@@ -1,12 +1,23 @@
-// DTO types mirroring the Rust backend's serde output (camelCase).
+// DTO types mirroring the Rust v2 backend's serde output (camelCase).
 
 export type Theme = "dark" | "light";
 export type Language = "tr" | "en";
 export type PlanId = "coding-plan" | "start-plan";
 export type ProviderId = "zai" | "bigmodel";
-export type ClaudeMethod = "claude_oauth" | "zcode_oauth" | "z_api" | "custom_api" | "disabled";
-export type OpenCodeMethod = "profile" | "zcode_oauth" | "z_api" | "disabled";
-export type HarnessId = "claude" | "opencode" | "antigravity";
+export type AccountKind =
+  | "zcode_oauth"
+  | "z_api"
+  | "claude_oauth"
+  | "antigravity_oauth"
+  | "custom_provider";
+export type HarnessId = "claude" | "opencode" | "zcode" | "antigravity";
+
+export interface CustomModelDef {
+  id: string;
+  name: string;
+  contextLimit: number | null;
+  outputLimit: number | null;
+}
 
 export interface Settings {
   theme: Theme;
@@ -25,31 +36,38 @@ export interface Settings {
   recentModels: string[];
   logLevel: string;
   updateCheck: boolean;
-  claudeActiveMethod: ClaudeMethod;
+  zcodeServiceAccountId: string | null;
+  claudeActiveMethod: string;
   claudeActiveSessionId: string | null;
   claudeActiveModel: string | null;
   opencodeActiveSessionId: string | null;
-  opencodeActiveMethod: OpenCodeMethod;
+  opencodeActiveMethod: string;
   opencodeActiveModel: string | null;
+  zcodeAppActiveAccountId: string | null;
+  zcodeAppActiveMethod: string;
   antigravityActiveSessionId: string | null;
 }
 
-export interface AccountSummary {
+export interface UnifiedAccountSummary {
   id: string;
   name: string;
-  kind: "oauth" | "api-key";
-  provider: ProviderId;
+  kind: AccountKind;
+  provider: string;
+  enabled: boolean;
   keyHint: string;
   userHint: string | null;
-  hasJwt: boolean;
-  hasSecret: boolean;
-  createdAt: number;
-  lastUsedAt: number | null;
+  baseUrl: string | null;
+  package: string | null;
   defaultPlan: PlanId | null;
   defaultModel: string | null;
-  enabled: boolean;
-  baseUrl: string | null;
-  active: boolean;
+  models: CustomModelDef[];
+  hasJwt: boolean;
+  hasSecret: boolean;
+  expiresAt: number | null;
+  createdAt: number;
+  lastUsedAt: number | null;
+  supportedHarnesses: string[];
+  activeIn: string[];
 }
 
 export interface CliInfo {
@@ -58,30 +76,9 @@ export interface CliInfo {
   path: string | null;
 }
 
-export interface HarnessSessionSummary {
-  id: string;
-  harness: HarnessId;
-  kind:
-    | "claude_oauth"
-    | "claude_api"
-    | "opencode_snapshot"
-    | "opencode_api"
-    | "opencode_zcode_proxy"
-    | "antigravity_oauth";
-  name: string;
-  enabled: boolean;
-  providerHint: string | null;
-  accountHint: string | null;
-  expiresAt: number | null;
-  meta: Record<string, unknown>;
-  createdAt: number;
-  lastUsedAt: number | null;
-  active: boolean;
-}
-
 export interface ClaudeLiveState {
   cli: CliInfo;
-  detectedMode: "claude_oauth" | "zcode_oauth" | "z_api" | "custom_api" | "disabled";
+  detectedMode: string;
   hasCredentialsFile: boolean;
   liveAccountHint: string | null;
   liveExpiresAt: number | null;
@@ -89,23 +86,53 @@ export interface ClaudeLiveState {
   liveModel: string | null;
 }
 
+export interface OpenCodeProviderView {
+  id: string;
+  name: string;
+  package: string | null;
+  baseUrl: string | null;
+  keyHint: string;
+  models: CustomModelDef[];
+  isManaged: boolean;
+}
+
 export interface OpenCodeLiveState {
   cli: CliInfo;
-  authPath: string;
   configPath: string;
-  hasAuthFile: boolean;
-  authProviders: string[];
-  configProviders: string[];
-  hasZcodeProvider: boolean;
-  detectedMode: OpenCodeMethod;
-  liveBaseUrl: string | null;
-  liveModel: string | null;
+  configExists: boolean;
+  configSource: "harness_auth" | "custom_provider" | "auth_json" | "none" | string;
+  activeModel: string | null;
+  baseUrl: string | null;
+  providers: OpenCodeProviderView[];
+  mcpNames: string[];
+  skillsCount: number;
+  parseError: string | null;
+}
+
+export interface ZCodePersonalRuleView {
+  providerId: string;
+  providerName: string;
+  enabled: boolean;
+  baseUrl: string | null;
+  keyHint: string;
+  models: string[];
+}
+
+export interface ZCodeLiveState {
+  installed: boolean;
+  appPath: string | null;
+  v2Exists: boolean;
+  zaiMode: string;
+  selectedKey: string | null;
+  activePersonalName: string | null;
+  personalRules: ZCodePersonalRuleView[];
 }
 
 export interface AntigravityLiveState {
   cli: CliInfo;
   hasKeyringToken: boolean;
   hasFileToken: boolean;
+  activeEmail: string | null;
   tokenHint: string | null;
   expiryDate: number | null;
   isExpired: boolean;
@@ -128,14 +155,8 @@ export interface ProxyStatus {
 export interface ProxyStatusDto extends ProxyStatus {
   activeAccountId: string | null;
   activeAccountName: string | null;
-  accountCount: number;
+  zcodeAccountCount: number;
   oauthRunning: boolean;
-}
-
-export interface ClaudeInfo {
-  found: boolean;
-  version: string | null;
-  path: string | null;
 }
 
 export interface Versions {
@@ -147,19 +168,19 @@ export interface PathsInfo {
   config: string;
   errorsLog: string;
   dataDir: string;
+  vault: string;
 }
 
 export interface AppStateDto {
   settings: Settings;
-  accounts: AccountSummary[];
-  sessions: HarnessSessionSummary[];
+  accounts: UnifiedAccountSummary[];
   proxy: ProxyStatusDto;
-  claude: ClaudeInfo;
   claudeLive: ClaudeLiveState;
   opencodeLive: OpenCodeLiveState;
+  zcodeLive: ZCodeLiveState;
   antigravityLive: AntigravityLiveState;
   harnessOauthRunning: boolean;
-  harnessOauthTarget: HarnessId | null;
+  harnessOauthTarget: string | null;
   versions: Versions;
   paths: PathsInfo;
 }
@@ -170,11 +191,9 @@ export interface TestResult {
   latencyMs: number | null;
 }
 
-export interface ModelsInfo {
-  available: boolean;
-  endpointModels: string[];
-  configModels: string[];
-  defaultModel: string;
+export interface ImportResultDto {
+  imported: number;
+  details: string[];
 }
 
 export interface ProxyConfig {
@@ -195,8 +214,6 @@ export interface ConfigSaveResult {
   restarted: boolean;
   config: ProxyConfig;
 }
-
-// --- Quota snapshot (proxy /quota shape) ---
 
 export interface QuotaBalance {
   showName: string;
@@ -227,8 +244,6 @@ export interface QuotaSnapshot {
   errors?: string[];
 }
 
-// --- Live logs (panel getLogs) ---
-
 export interface LogsPage {
   ok: boolean;
   event?: string;
@@ -236,8 +251,6 @@ export interface LogsPage {
   lines?: string[];
   error?: string;
 }
-
-// --- OAuth events ---
 
 export interface OAuthDone {
   ok: boolean;

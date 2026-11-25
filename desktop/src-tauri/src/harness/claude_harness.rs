@@ -25,6 +25,7 @@ pub const MANAGED_CLAUDE_ENV: &[&str] = &[
     "ANTHROPIC_BASE_URL",
     "ANTHROPIC_AUTH_TOKEN",
     "ANTHROPIC_API_KEY",
+    "API_TIMEOUT_MS",
     "ANTHROPIC_MODEL",
     "ANTHROPIC_DEFAULT_OPUS_MODEL",
     "ANTHROPIC_DEFAULT_SONNET_MODEL",
@@ -301,12 +302,17 @@ pub fn apply_env_bridge_at(
         }
     }
 
+    let normalized_base = base_url.trim().trim_end_matches('/');
+    let normalized_base = normalized_base.strip_suffix("/v1").unwrap_or(normalized_base);
+
     patch_settings_env(&paths.settings_json, |env| {
         for key in MANAGED_CLAUDE_ENV {
             env.remove(*key);
         }
-        env.insert("ANTHROPIC_BASE_URL".into(), json!(base_url));
+        env.insert("ANTHROPIC_BASE_URL".into(), json!(normalized_base));
         env.insert("ANTHROPIC_AUTH_TOKEN".into(), json!(auth_token));
+        env.insert("ANTHROPIC_API_KEY".into(), json!(""));
+        env.insert("API_TIMEOUT_MS".into(), json!("3000000"));
         if let Some(m) = model.filter(|m| !m.is_empty()) {
             for var in [
                 "ANTHROPIC_MODEL",
@@ -454,15 +460,15 @@ fn poll_claude_login(app: AppHandle, temp_dir: PathBuf, name_hint: String) {
         if isolated_paths.credentials_json.is_file() {
             let state = app.state::<AppState>();
             let vault_key = state.vault_key();
-            if let Ok(rec) = capture_current_oauth_at(
+            if let Ok(rec) = capture_unified_claude_oauth_at(
                 &isolated_paths,
                 &vault_key,
                 (!name_hint.trim().is_empty()).then_some(name_hint.as_str()),
             ) {
                 let id = rec.id.clone();
-                let mut sessions = state.sessions.lock().unwrap();
-                sessions.sessions.push(rec);
-                if let Err(e) = sessions.save(&state.paths.sessions_file()) {
+                let mut vault = state.vault.lock().unwrap();
+                vault.accounts.push(rec);
+                if let Err(e) = vault.save(&state.paths.unified_vault_file()) {
                     captured = Err(e);
                 } else {
                     captured = Ok(Some(id));
@@ -729,6 +735,86 @@ pub fn apply_claude_api_at(
     })
 }
 
+pub fn unified_from_claude_session(rec: HarnessSessionRecord) -> crate::unified_vault::UnifiedAccount {
+    crate::unified_vault::UnifiedAccount {
+        id: rec.id,
+        name: rec.name,
+        kind: "claude_oauth".into(),
+        provider: "anthropic".into(),
+        enabled: rec.enabled,
+        key_hint: rec.account_hint.clone().unwrap_or_default(),
+        user_hint: rec.account_hint,
+        base_url: None,
+        package: None,
+        default_plan: None,
+        default_model: None,
+        models: Vec::new(),
+        has_jwt: false,
+        has_secret: true,
+        expires_at: rec.expires_at,
+        created_at: rec.created_at,
+        last_used_at: rec.last_used_at,
+        encrypted: rec.encrypted,
+    }
+}
+
+pub fn capture_unified_claude_oauth_at(
+    paths: &ClaudePaths,
+    vault_key: &[u8; 32],
+    name: Option<&str>,
+) -> Result<crate::unified_vault::UnifiedAccount, String> {
+    let rec = capture_current_oauth_at(paths, vault_key, name)?;
+    Ok(unified_from_claude_session(rec))
+}
+
+pub fn disable_unified_at(
+    paths: &ClaudePaths,
+    clear_oauth_credentials: bool,
+    vault: &crate::unified_vault::UnifiedVault,
+    vault_key: &[u8; 32],
+) -> Result<Option<crate::unified_vault::UnifiedAccount>, String> {
+    let mut backup: Option<crate::unified_vault::UnifiedAccount> = None;
+
+    if clear_oauth_credentials && paths.credentials_json.is_file() {
+        if let Ok(rec) =
+            capture_unified_claude_oauth_at(paths, vault_key, Some("Claude OAuth (Yedek)"))
+        {
+            if let Ok(payload) = rec.decrypt_payload(vault_key) {
+                let already_saved = vault
+                    .accounts
+                    .iter()
+                    .filter(|a| a.kind == "claude_oauth")
+                    .any(|a| a.decrypt_payload(vault_key).ok().as_ref() == Some(&payload));
+                if !already_saved {
+                    backup = Some(rec);
+                }
+            }
+        }
+    }
+
+    patch_settings_env(&paths.settings_json, |env| {
+        for key in MANAGED_CLAUDE_ENV {
+            env.remove(*key);
+        }
+    })?;
+
+    if clear_oauth_credentials {
+        if paths.credentials_json.is_file() {
+            let _ = std::fs::remove_file(&paths.credentials_json);
+        }
+        if paths.claude_json.is_file() {
+            let mut root = read_json_object(&paths.claude_json);
+            if root.remove("oauthAccount").is_some() {
+                let text = serde_json::to_string_pretty(&Value::Object(root))
+                    .map_err(|e| e.to_string())?;
+                atomic_write(&paths.claude_json, &text)?;
+            }
+        }
+    }
+
+    Ok(backup)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -769,6 +855,8 @@ mod tests {
         assert_eq!(after["env"]["CUSTOM_USER_VAR"], "keep-me");
         assert_eq!(after["env"]["ANTHROPIC_BASE_URL"], "https://api.z.ai/api/anthropic");
         assert_eq!(after["env"]["ANTHROPIC_AUTH_TOKEN"], "zk-12345678");
+        assert_eq!(after["env"]["ANTHROPIC_API_KEY"], "");
+        assert_eq!(after["env"]["API_TIMEOUT_MS"], "3000000");
         assert_eq!(after["env"]["ANTHROPIC_MODEL"], "glm-5.3");
 
         let live = inspect_live_at(&paths);

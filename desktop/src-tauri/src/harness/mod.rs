@@ -7,7 +7,9 @@
 
 pub mod antigravity;
 pub mod claude_harness;
+pub mod openai_bridge;
 pub mod opencode;
+pub mod zcode_harness;
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};

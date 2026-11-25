@@ -4,58 +4,45 @@
 
 # HarnessAuth
 
-**Claude Code, OpenCode, Antigravity CLI (`agy`) ve ZCode/Z.AI oturumlarını tek bir masaüstü uygulamasından yönetin.**
+**Claude Code, OpenCode, ZCode Desktop ve Antigravity CLI (`agy`) hesap ve özel modellerini tek bir merkezi kasadan yönetin.**
 
-HarnessAuth, yapay zeka kodlama araçlarınızın (AI harnesses) tüm oturumlarını, OAuth token'larını ve API anahtarlarını **Windows Credential Manager + AES-256-GCM** ile şifrelenmiş tek bir kasada saklayan; istediğiniz sağlayıcıyla sınırsız hesap eklemenizi, düzenlemenizi, tek tıkla geçiş yapmanızı ve devre dışı bırakmanızı (disable) sağlayan **Windows masaüstü uygulamasıdır** (Tauri v2 + Rust + React).
+HarnessAuth, tüm AI kodlama araçlarınızın OAuth oturumlarını, Z.AI/BigModel API anahtarlarını ve `opencode.jsonc` uyumlu özel modellerini **Windows Credential Manager + AES-256-GCM** ile şifrelenmiş tek bir kasada (`vault.json`) saklar; istediğiniz hesap veya modeli istediğiniz araçta tek tıkla çalıştırmanızı sağlar. ZCode OAuth köprüsü ayrı bir yan EXE olmadan doğrudan uygulamanın içine gömülü **tek EXE** ve **tek kurulum dosyası** olarak dağıtılır.
 
 </div>
 
 ---
 
-## Öne Çıkan Özellikler
+## Yenilikler (v2 — Merkezi Kasa & Tek EXE)
 
-### Claude Code (`claude`)
-- **5 Aktif Yöntem Arasında Tek Tıkla Geçiş:**
-  1. **Claude Aboneliği (OAuth):** Çoklu Anthropic Claude Pro/Max OAuth oturumlarını izole `CLAUDE_CONFIG_DIR` ile uygulama içinden ekleyin (`claude auth login`) veya mevcut `~/.claude/.credentials.json` oturumunuzu içe aktarın.
-  2. **ZCode Aboneliği (OAuth Proxy):** Birden fazla ZCode / BigModel OAuth hesabından istediğinizi ve modelini seçin; gömülü arka plan motoru otomatik başlar ve `~/.claude/settings.json` yönlendirilir.
-  3. **Z API (Doğrudan API Key):** Arka plan proxy'si çalıştırmadan doğrudan Z.AI (`https://api.z.ai/api/anthropic`) veya BigModel endpoint'ine bağlanın.
-  4. **Sağlayıcı API Key (`custom_api`):** Anthropic (Resmi API), OpenRouter, DeepSeek, Z.AI, BigModel veya tamamen özel bir sağlayıcı kimliği + Base URL + model ile sınırsız API hesabı ekleyin, düzenleyin ve aktif edin.
-  5. **Devre Dışı (Disable):** Aktif yönlendirmeyi ve kimlik dosyasını temizler; kasada kaydı olmayan canlı bir oturum varsa silmeden önce otomatik yedekler.
-- Global `~/.claude/settings.json` ve `~/.claude.json` dosyalarındaki mevcut hook, izin, tema ve özel env değişkenlerinize dokunmaz.
-
-### OpenCode (`opencode`)
-- **4 Aktif Yöntem Arasında Tek Tıkla Geçiş:**
-  1. **OpenCode Profili (OAuth / API):** Mevcut `%USERPROFILE%\.local\share\opencode\auth.json` + `opencode.json` oturumunu içe aktarın, izole `OPENCODE_AUTH_PATH` ile `opencode auth login` yapın veya Anthropic, OpenAI, Google, OpenRouter, Z.AI, BigModel ya da özel sağlayıcı kimliğiyle sınırsız API profili ekleyin.
-  2. **ZCode Aboneliği (OAuth Proxy):** Kayıtlı ZCode OAuth hesaplarınızdan istediğinizi + modeli seçip doğrudan OpenCode `provider.zcode` olarak aktif edin.
-  3. **Z API (Doğrudan API Key):** Kayıtlı Z.AI / BigModel API hesaplarını proxy gerekmeden doğrudan OpenCode içine yazın.
-  4. **Devre Dışı (Disable):** Canlı `auth.json` yedeğini koruyarak aktif oturumu ve HarnessAuth tarafından yönetilen provider girdilerini temizler.
-- Tüm kayıtlı API ve ZCode köprü profilleri düzenlenebilir, tek tek etkinleştirilip devre dışı bırakılabilir (enable/disable) ve silinebilir.
-
-### Antigravity CLI (`agy`)
-- Windows Credential Manager (`service: "gemini"`, `account: "antigravity"`) ve `%USERPROFILE%\.gemini\antigravity-cli\antigravity-oauth-token` dosya aynasını şifreli kasada yönetir.
-- Mevcut `agy` oturumunu içe aktarabilir, mevcut oturumu kaybetmeden yeni Google hesabı ekleyebilir, token geçerlilik süresini görebilir, hesaplar arası tek tıkla geçiş yapabilir veya oturumu devre dışı bırakabilirsiniz.
-
-### ZCode Hesapları & Gömülü Arka Plan Servisi
-- Z.AI / BigModel OAuth ve API Key hesapları (opsiyonel özel Base URL desteğiyle), hesap bazlı **Etkin / Devre Dışı** anahtarı ve bağlantı testi.
-- Konsol/TUI arayüzü ve Docker kaldırılmıştır; ZCode OAuth köprüsü yalnızca uygulamanın içine gömülü gizli arka plan motoru (`harness-zcode-engine`) olarak çalışır.
-- Coding Plan / Start Plan / Otomatik Geçiş, canlı kota takibi, model testi, canlı loglar, sistem tepsisi ve Windows açılışında otomatik başlatma.
+- **Tek Dosya Mimari:** Gömülü ZCode köprü motoru `HarnessAuth.exe` içine sıkıştırılarak paketlenir; kurulum veya taşınabilir kopyada yanında ikinci bir `.exe` dosyası bulunmaz.
+- **3 Sadelik Odaklı Sekme:**
+  1. **Araçlar (`Harnesses`):** Claude Code, OpenCode, ZCode Desktop ve Antigravity CLI (`agy`) kartları içinde her aracın uyumlu hesapları listelenir; istediğiniz hesaba tek tıkla anında geçebilir, `+ Ekle` ile doğrudan hesap/model ekleyebilir, devre dışı bırakabilir veya projede başlatabilirsiniz. Canlı **`opencode.jsonc` Modelleri** paneliyle OpenCode sağlayıcılarını (`providers`, `package`, `settings.baseURL/apiKey`, `models.<id>.limit`) uygulama içinden yönetebilirsiniz (`skills` ve `mcp` ayarları korunur).
+  2. **Hesaplar (`Accounts`):** `claude_oauth`, `custom_provider` (`opencode.jsonc` uyumlu çoklu model), `antigravity_oauth`, `z_api` ve `zcode_oauth` kayıtlarını tek ekranda ekleyip düzenleyebilir, test edebilir, etkin/devre dışı yapabilir veya **Sistemden İçe Aktar** ile mevcut oturumları otomatik içeri alabilirsiniz.
+  3. **Ayarlar (`Settings`):** **Genel & Sistem** (tema, dil, varsayılan klasör, tepsiye küçültme, Windows başlangıcı, kasa yolları) ve isteğe bağlı **ZCode Proxy & Kota** (gömülü proxy köprüsü kontrolü, kotalar ve loglar).
 
 ---
 
-## Kurulum
+## Araç Desteği Matrisi
 
-### Son Kullanıcı (Windows 10 / 11)
-1. [GitHub Releases](../../releases) üzerinden **`HarnessAuth_<sürüm>_x64-setup.exe`** kurulum dosyasını indirin ve çalıştırın (yönetici izni gerektirmez).
-2. Ek olarak Bun, Node.js veya Docker kurmanıza gerek yoktur; arka plan motoru kurulum paketinin içinde gelir.
-
-### Veri Konumu ve Güvenlik
-- Uygulama verileri `%APPDATA%\harness-auth` klasöründe tutulur (`settings.json`, `accounts.json`, `sessions.json`, `proxy\`, `launches\`).
-- Tüm OAuth token'ları ve API anahtarları **Windows Credential Manager** (`HarnessAuth / master-key`) üzerinde saklanan ana anahtarla **AES-256-GCM** şifrelenir; arayüz (frontend) katmanına asla ham sır gönderilmez.
-- Önceki sürümden (`%APPDATA%\zcode-manager`) yükselten kullanıcıların ZCode hesapları ilk açılışta otomatik olarak yeni kasaya taşınır.
+| Hesap / Yöntem | Claude Code | OpenCode (`opencode.jsonc`) | ZCode (`~/.zcode/v2/`) | Antigravity CLI (`agy`) |
+|---|:---:|:---:|:---:|:---:|
+| **ZCode OAuth** | ✅ (Gömülü proxy) | ✅ (Gömülü proxy) | ✅ (`oauth` modu) | — |
+| **Z.AI / BigModel API Key** | ✅ (Doğrudan Anthropic) | ✅ (`providers.harness-auth`) | ✅ (`standard-personal` kuralı) | — |
+| **Claude OAuth** | ✅ (`~/.claude/.credentials.json`) | — | — | — |
+| **Özel Model (`opencode.jsonc`)** | ✅ (Anthropic & yerleşik OpenAI↔Anthropic Bridge) | ✅ (`providers.<slug>`) | — | — |
+| **Antigravity OAuth** | — | — | — | ✅ (Credential Manager + mirror) |
 
 ---
 
-## Geliştirme ve Paketleme (Build)
+## Kurulum & Taşınabilir Kullanım (Windows 10 / 11)
+
+- **Kurulum Dosyası:** `HarnessAuth_1.0.0_x64-setup.exe` (kullanıcı başına kurulum, yönetici izni gerektirmez).
+- **Tek Taşınabilir EXE:** `HarnessAuth.exe` — kurulum gerektirmez, yanında ek `.exe` dosyası taşımaz.
+- **Güvenlik:** Tüm token ve API anahtarları `%APPDATA%\harness-auth\vault.json` içinde Windows Credential Manager anahtarıyla (`HarnessAuth / master-key`) AES-256-GCM şifrelenir. Eski `accounts.json` ve `sessions.json` kayıtları ilk açılışta otomatik olarak merkezi kasaya taşınır.
+
+---
+
+## Geliştirme ve Derleme
 
 Gereksinimler: **Bun 1.4+**, **Node.js 22+**, **pnpm 10+**, **Rust (stable, MSVC)**.
 
@@ -64,19 +51,15 @@ Gereksinimler: **Bun 1.4+**, **Node.js 22+**, **pnpm 10+**, **Rust (stable, MSVC
 bun install
 pnpm --dir desktop install
 
-# 2. Gömülü headless ZCode motorunu derle
+# 2. Gömülü ZCode motorunu derle ve sıkıştır (desktop/src-tauri/embedded/engine.exe.gz)
 bun run build:sidecar
 
-# 3. Masaüstü uygulamasını geliştirme modunda başlat
+# 3. Geliştirme modunda başlat
 bun run dev
 
-# 4. Windows NSIS kurulum dosyasını (.exe) derle
+# 4. Tek EXE + NSIS kurulum dosyasını derle
 bun run build:installer
 ```
-
-Üretilen kurulum paketi: `desktop/src-tauri/target/release/bundle/nsis/HarnessAuth_1.0.0_x64-setup.exe`.
-
-Ayrıntılı masaüstü mimarisi için [desktop/README.md](desktop/README.md) dosyasına bakabilirsiniz.
 
 ## Testler
 
@@ -84,9 +67,9 @@ Ayrıntılı masaüstü mimarisi için [desktop/README.md](desktop/README.md) do
 # Headless ZCode motor testleri
 bun test
 
-# Masaüstü frontend typecheck + production build
+# Frontend typecheck + Vite build
 pnpm --dir desktop build
 
-# Rust backend birim testleri (gerçek kullanıcı dosyalarına dokunmaz)
+# Rust birim testleri (tümü izole temp dizinlerinde çalışır)
 cargo test --manifest-path desktop/src-tauri/Cargo.toml --lib
 ```

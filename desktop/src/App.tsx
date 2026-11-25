@@ -5,12 +5,8 @@ import { AppShell } from "@/components/AppShell";
 import { useApp } from "@/stores/app";
 import { translate } from "@/lib/i18n";
 import type { HarnessOAuthDone, OAuthDone, ProxyStatusDto } from "@/lib/types";
-import { DashboardPage } from "@/pages/DashboardPage";
+import { HarnessesPage } from "@/pages/HarnessesPage";
 import { AccountsPage } from "@/pages/AccountsPage";
-import { ClaudeCodePage } from "@/pages/ClaudeCodePage";
-import { OpenCodePage } from "@/pages/OpenCodePage";
-import { AntigravityPage } from "@/pages/AntigravityPage";
-import { ProxyPage } from "@/pages/ProxyPage";
 import { SettingsPage } from "@/pages/SettingsPage";
 
 export default function App() {
@@ -18,7 +14,6 @@ export default function App() {
   const refresh = useApp((s) => s.refresh);
   const theme = useApp((s) => s.state?.settings.theme ?? "dark");
 
-  // Initial load + backend event wiring.
   React.useEffect(() => {
     void refresh();
     const unprox = listen<ProxyStatusDto>("proxy://state", (e) => {
@@ -59,7 +54,6 @@ export default function App() {
     };
   }, [refresh]);
 
-  // Status polling (3 s) while the window is visible.
   React.useEffect(() => {
     const id = setInterval(() => {
       if (document.visibilityState === "visible") void refresh();
@@ -67,7 +61,6 @@ export default function App() {
     return () => clearInterval(id);
   }, [refresh]);
 
-  // Theme class on <html>.
   React.useEffect(() => {
     document.documentElement.classList.toggle("dark", theme === "dark");
   }, [theme]);
@@ -75,12 +68,8 @@ export default function App() {
   return (
     <>
       <AppShell>
-        {page === "dashboard" && <DashboardPage />}
-        {page === "claude" && <ClaudeCodePage />}
-        {page === "opencode" && <OpenCodePage />}
-        {page === "antigravity" && <AntigravityPage />}
+        {page === "harnesses" && <HarnessesPage />}
         {page === "accounts" && <AccountsPage />}
-        {page === "proxy" && <ProxyPage />}
         {page === "settings" && <SettingsPage />}
       </AppShell>
       <Toaster position="bottom-right" richColors closeButton />

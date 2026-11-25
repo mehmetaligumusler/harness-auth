@@ -5,9 +5,9 @@
   "type": "module",
   "scripts": {
     "dev": "pnpm --dir desktop tauri dev",
-    "build:sidecar": "bun run scripts/build-fork-worker.ts && bun build --compile --define \"require.resolve=undefined\" src/index.ts --outfile desktop/src-tauri/binaries/harness-zcode-engine-x86_64-pc-windows-msvc.exe",
+    "build:sidecar": "node desktop/scripts/prepare-sidecar.mjs",
     "build:frontend": "pnpm --dir desktop build",
-    "build:installer": "bun run build:sidecar && pnpm --dir desktop tauri build",
+    "build:installer": "node desktop/scripts/prepare-sidecar.mjs && pnpm --dir desktop tauri build",
     "test:engine": "bun test",
     "test": "bun test && pnpm --dir desktop build",
     "regen:mcp": "bun run scripts/regen-mcp-catalogue.ts"

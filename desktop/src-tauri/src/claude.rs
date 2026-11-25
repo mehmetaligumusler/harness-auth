@@ -102,9 +102,9 @@ pub fn valid_model_name(model: &str) -> bool {
         _ => return false,
     }
     let rest: Vec<char> = chars.collect();
-    rest.len() <= 63
+    rest.len() <= 127
         && rest.iter().all(|c| {
-            c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-' | '[' | ']')
+            c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-' | '[' | ']' | '/' | ':')
         })
 }
 
@@ -297,6 +297,8 @@ mod tests {
     fn model_name_validation() {
         assert!(valid_model_name("glm-5.3"));
         assert!(valid_model_name("glm-5.3[1m]"));
+        assert!(valid_model_name("Qwen3.5-9B-Uncensored-HauhauCS-Aggressive-Q4_K_M.gguf"));
+        assert!(valid_model_name("provider/model:q4"));
         assert!(valid_model_name("a"));
         assert!(!valid_model_name(""));
         assert!(!valid_model_name("-glm"));
@@ -305,6 +307,6 @@ mod tests {
         assert!(!valid_model_name("glm%x%"));
         assert!(!valid_model_name("glm|x"));
         assert!(!valid_model_name("glm>x"));
-        assert!(!valid_model_name(&"x".repeat(70)));
+        assert!(!valid_model_name(&"x".repeat(135)));
     }
 }

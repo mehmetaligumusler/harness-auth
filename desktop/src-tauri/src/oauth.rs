@@ -104,7 +104,8 @@ fn run_flow_inner(app: &AppHandle, provider: &str, name_hint: &str) -> Result<Op
         let settings = state.settings.lock().unwrap().clone();
         let paths = state.paths.clone();
         let secret = state.secret.clone();
-        (crate::paths::resolve_proxy_exe(), paths, settings, secret)
+        let exe = paths.proxy_exe();
+        (exe, paths, settings, secret)
     };
 
     crate::proxy::ensure_proxy_config(&paths)?;
@@ -227,28 +228,43 @@ fn run_flow_inner(app: &AppHandle, provider: &str, name_hint: &str) -> Result<Op
     let default_name = format!(
         "{} OAuth {}",
         if provider == "zai" { "Z.AI" } else { "BigModel" },
-        vault.accounts.len() + 1
+        vault
+            .accounts
+            .iter()
+            .filter(|a| a.kind == "zcode_oauth")
+            .count()
+            + 1
     );
     let name = if name_hint.trim().is_empty() {
         default_name
     } else {
         name_hint.trim().to_string()
     };
-    let record =
-        crate::vault::record_from_credential(&name, "oauth", &cred, &vault_key)?;
+    let record = crate::unified_vault::UnifiedAccount::from_zcode_credential(
+        &name,
+        "zcode_oauth",
+        &cred,
+        None,
+        &vault_key,
+    )?;
     let account_id = record.id.clone();
-    let was_empty = vault.accounts.is_empty();
+    let has_service = {
+        let mut s = state.settings.lock().unwrap();
+        let had = s.zcode_service_account_id.is_some();
+        if !had {
+            s.zcode_service_account_id = Some(account_id.clone());
+            let _ = s.save(&state.paths);
+        }
+        had
+    };
     vault.accounts.push(record);
-    if was_empty {
-        vault.active_id = Some(account_id.clone());
-    }
     vault
-        .save(&state.paths.vault_file())
+        .save(&state.paths.unified_vault_file())
         .map_err(|e| format!("kasa kaydedilemedi: {e}"))?;
     drop(vault);
 
-    // First account ever: keep the store as-is (it IS the active account).
-    if !was_empty {
+    // First ZCode service account ever: keep the store as-is (it IS the active account).
+    if has_service {
         restore(app);
     }
 

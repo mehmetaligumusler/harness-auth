@@ -1,74 +1,41 @@
 # HarnessAuth — Masaüstü Uygulaması (`desktop/`)
 
-**Claude Code**, **OpenCode**, **Antigravity CLI (`agy`)** ve **ZCode/Z.AI** için Windows 10/11 masaüstü oturum yöneticisi.
+**Claude Code**, **OpenCode**, **ZCode Desktop** ve **Antigravity CLI (`agy`)** için tek EXE Windows 10/11 merkezi oturum ve model yöneticisi.
 
 | Katman | Teknoloji |
 |---|---|
 | Arayüz | React 18 + TypeScript + Tailwind CSS + Zustand + Lucide |
 | Uygulama çerçevesi | Tauri 2 (WebView2, NSIS installer) |
-| Yerel backend | Rust (`harness-auth`: şifreli kasa, harness adaptörleri, keyring, süreç yönetimi) |
-| Gömülü ZCode motoru | Headless `harness-zcode-engine.exe` (yan süreç / sidecar) |
+| Yerel backend | Rust (`harness-auth`: `unified_vault`, `openai_bridge`, harness adaptörleri, keyring) |
+| Gömülü ZCode motoru | `embedded/engine.exe.gz` (uygulama açılışında/gerektiğinde `%APPDATA%\harness-auth\runtime\` içine açılır) |
 
 ---
 
-## Mimari
+## Mimari (`src-tauri/src/`)
 
-- **Çoklu Harness Oturum Kasası (`src-tauri/src/harness/`):**
-  - `claude_harness.rs`: `~/.claude/settings.json`, `~/.claude/.credentials.json` ve `~/.claude.json` için 5 yöntemli geçiş (`claude_oauth`, `zcode_oauth`, `z_api`, `custom_api`, `disabled`), izole `CLAUDE_CONFIG_DIR` ile yeni OAuth girişi ve otomatik yedekleme.
-  - `opencode.rs`: `%USERPROFILE%\.local\share\opencode\auth.json` ve `%USERPROFILE%\.config\opencode\opencode.json` için 4 yöntemli geçiş (`profile`, `zcode_oauth`, `z_api`, `disabled`), sınırsız sağlayıcı API / ZCode köprüsü / OAuth oturumu ve düzenleme.
-  - `antigravity.rs`: Windows Credential Manager (`gemini:antigravity`) ve `%USERPROFILE%\.gemini\antigravity-cli\antigravity-oauth-token` aynası üzerinden çoklu Google hesabı yönetimi.
-- **ZCode Arka Plan Motoru (`src-tauri/src/proxy.rs`, `vault.rs`):**
-  - `harness-zcode-engine.exe` yalnızca ZCode OAuth aboneliklerini yerel köprü üzerinden sunmak için gizli yan süreç olarak çalıştırılır; konsol/TUI açılmaz.
-  - Uygulama kapanınca isteğe bağlı olarak arka planda çalışmaya devam eder ve yeniden açıldığında devralınır (adopt).
-
----
-
-## Veri ve Güvenlik
-
-- Tüm uygulama verisi `%APPDATA%\harness-auth` altında tutulur:
-  - `settings.json`: arayüz ayarları ve aktif harness seçimleri
-  - `accounts.json`: AES-256-GCM şifreli ZCode / Z.AI / BigModel hesap kasası
-  - `sessions.json`: AES-256-GCM şifreli Claude Code / OpenCode / Antigravity oturum kasası
-  - `proxy\config.yaml`, `proxy\store\credentials.json`, `proxy\errors.log`
-  - `launches\`: terminal başlatma betikleri
-  - `tmp\`: izole OAuth girişleri için geçici klasörler (işlem bitince silinir)
-- Ana şifreleme anahtarı **Windows Credential Manager** (`HarnessAuth / master-key`) üzerinde saklanır ve frontend'e asla iletilmez.
-- Tüm JSON dosya güncellemeleri geçici dosya + atomik `rename` ile yapılır; kullanıcının diğer ayarlarına dokunulmaz.
+- **`unified_vault.rs`:** Tüm hesapları (`zcode_oauth`, `z_api`, `claude_oauth`, `antigravity_oauth`, `custom_provider`) `%APPDATA%\harness-auth\vault.json` dosyasında Windows Credential Manager + AES-256-GCM ile saklar. Eski `accounts.json` ve `sessions.json` dosyalarını ilk açılışta otomatik taşır.
+- **`embedded_engine.rs`:** `desktop/scripts/prepare-sidecar.mjs` ile gzip-sıkıştırılan Bun ZCode motorunu `include_bytes!` üzerinden tek `HarnessAuth.exe` içine gömer.
+- **Harness Adaptörleri (`src-tauri/src/harness/`):**
+  - `claude_harness.rs`: `~/.claude/settings.json` ve `.credentials.json` yönetimi (OAuth, ZCode Proxy, Z.AI API, Custom Provider).
+  - `openai_bridge.rs`: `@opencode/ai/providers/openai-compatible` özel modellerin Claude Code ile çalışabilmesi için yerleşik Anthropic `/v1/messages` ↔ OpenAI `/chat/completions` yerel köprüsü.
+  - `opencode.rs`: JSONC parser ile `~/.config/opencode/opencode.jsonc` okuma/yazma (`providers`, `package`, `settings`, `models.<id>.limit`, `skills`/`mcp` koruma).
+  - `zcode_harness.rs`: `~/.zcode/v2/` (`provider_config.json`, `setting.json`) içindeki `standard-personal` API kurallarını ve `oauth` modunu yönetir.
+  - `antigravity.rs`: `gemini:antigravity` keyring + token mirror geçişi.
 
 ---
 
-## Geliştirme ve Derleme
-
-Önkoşullar: **Bun 1.4+**, **Node.js 22+**, **pnpm 10+**, **Rust (MSVC)**, WebView2.
+## Derleme ve Test
 
 ```powershell
-# Repo kökünden:
-bun install
-pnpm --dir desktop install
-
-# Headless sidecar motorunu derle (src-tauri/binaries/ içine yazar)
+# Gömülü motoru hazırla (desktop/src-tauri/embedded/engine.exe.gz)
 bun run build:sidecar
 
-# Geliştirme penceresini aç
-bun run dev
-
-# Windows NSIS kurulum dosyasını (.exe) derle
-bun run build:installer
-```
-
-Üretilen çıktılar:
-- **Installer:** `desktop/src-tauri/target/release/bundle/nsis/HarnessAuth_1.0.0_x64-setup.exe`
-- **Portable:** `desktop/src-tauri/target/release/harness-auth.exe` (yanındaki `harness-zcode-engine.exe` ile)
-
-## Testler
-
-```powershell
 # Frontend typecheck + build
 pnpm --dir desktop build
 
-# Rust backend birim testleri (tümü izole temp dizinlerinde çalışır)
+# Rust backend birim testleri
 cargo test --manifest-path desktop/src-tauri/Cargo.toml --lib
 
-# Gerçek sidecar ile yaşam döngüsü E2E testi
-cargo test --manifest-path desktop/src-tauri/Cargo.toml --test e2e
+# Tek EXE & NSIS kurulum derlemesi
+pnpm --dir desktop tauri build --bundles nsis
 ```

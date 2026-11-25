@@ -8,17 +8,15 @@ pub const TRAY_ID: &str = "harness-auth-tray";
 
 pub fn create(app: &AppHandle) -> tauri::Result<()> {
     let show = MenuItem::with_id(app, "show", "HarnessAuth'u Göster", true, None::<&str>)?;
-    let toggle = MenuItem::with_id(app, "toggle-proxy", "ZCode Servisini Başlat / Durdur", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "Çıkış", true, None::<&str>)?;
-    let menu = Menu::with_items(app, &[&show, &toggle, &quit])?;
+    let menu = Menu::with_items(app, &[&show, &quit])?;
 
     let mut builder = TrayIconBuilder::with_id(TRAY_ID)
         .menu(&menu)
         .show_menu_on_left_click(false)
-        .tooltip("HarnessAuth")
+        .tooltip("HarnessAuth — AI Araç Hesap Yöneticisi")
         .on_menu_event(|app, event| match event.id().as_ref() {
             "show" => show_main_window(app),
-            "toggle-proxy" => crate::commands::toggle_proxy(app),
             "quit" => {
                 if let Some(win) = app.get_webview_window("main") {
                     let _ = win.close();
@@ -54,13 +52,13 @@ pub fn show_main_window(app: &AppHandle) {
     }
 }
 
-/// Refresh the tray tooltip with the current proxy state.
+/// Refresh the tray tooltip subtly.
 pub fn update_tooltip(app: &AppHandle, running: bool) {
     if let Some(tray) = app.tray_by_id(TRAY_ID) {
         let text = if running {
-            "HarnessAuth — ZCode servisi çalışıyor"
+            "HarnessAuth — Aktif"
         } else {
-            "HarnessAuth — ZCode servisi durduruldu"
+            "HarnessAuth — AI Araç Hesap Yöneticisi"
         };
         let _ = tray.set_tooltip(Some(text));
     }
